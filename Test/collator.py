@@ -59,42 +59,19 @@ class TestCollator(object):
             self.tokenizer.padding_side = "left"
 
     def __call__(self, batch):
-        # 构造 batch_prompts，同时保留原始 labels
+        # 直接拼接输入，显式包含 "Response:" 分隔，避免依赖 chat 模板
         batch_prompts = []
         targets = [d["labels"] for d in batch]
-        print(f"batch is {batch}")
 
         for d in batch:
-            message = d["input_ids"]   # 原始文本
-            v = d.get("v", None)       # v 可能在 batch 中
-
-            system_text = "You are an expert in Recommender System. The user has interacted with several items in chronological order. Can you predict the next possible item that the user may expect?"
-            if system_text in message:
-                user_text = message.split(system_text)[-1].strip()
-                chat_format = [
-                    {"role": "system", "content": system_text},
-                    {"role": "user", "content": user_text}
-                ]
+            message = d["input_ids"]
+            # 确保包含 "Response:" 以匹配评测与前缀约束逻辑
+            if "Response:" in message:
+                prompt_text = message
             else:
-                # fallback: 如果找不到 system_text，则全当作 user
-                chat_format = [
-                    {"role": "user", "content": message}
-                ]
-            print(f"chat_format == {chat_format}")
-
-            prompt_text = self.tokenizer.apply_chat_template(
-                chat_format,
-                tokenize=False,
-                enable_thinking=True,
-                add_generation_prompt=True
-            )
-
+                prompt_text = f"{message}"
             batch_prompts.append(prompt_text)
 
-        print(f"batch_prompts == {batch_prompts}")
-
-
-        # 返回 tokenized inputs + targets + 原始 prompt_text（可选，用于 llm.generate）
         return {
             "inputs": batch_prompts,
             "targets": targets

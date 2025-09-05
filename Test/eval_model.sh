@@ -9,7 +9,7 @@ CKPT_DEFAULT="/llm-reco-ssd-share/baohonghui/think_pretrain/results/pretrain_onl
 CKPT_PATH="${1:-$CKPT_DEFAULT}"
 shift || true
 
-python Test/test_hitrate.py \
+python test_hitrate.py \
   --ckpt_path "${CKPT_PATH}" \
   --test_prompt_ids all \
   --filter_items \

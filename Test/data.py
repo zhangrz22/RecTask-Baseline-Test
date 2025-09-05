@@ -66,25 +66,54 @@ class BaseDataset(Dataset):
 
     def get_prefix_allowed_tokens_fn(self, tokenizer):
 
-
         if self.allowed_tokens is None:
             self.allowed_tokens = {}
             for index in self.indices.values():
                 for i, token in enumerate(index):
-                    token_id = tokenizer(token)["input_ids"][1]
+                    token_ids = tokenizer(token, add_special_tokens=False)["input_ids"]
+                    if not token_ids:
+                        # 跳过无法分词成 token 的条目
+                        continue
+                    token_id = token_ids[0]
                     if i not in self.allowed_tokens.keys():
                         self.allowed_tokens[i] = set()
                     self.allowed_tokens[i].add(token_id)
-            self.allowed_tokens[len(self.allowed_tokens.keys())] = set([tokenizer.eos_token_id])
-        sep = tokenizer("Response:")["input_ids"][1:]
+            # 第 len(self.allowed_tokens) 位只允许结束
+            eos_id = tokenizer.eos_token_id if tokenizer.eos_token_id is not None else 0
+            self.allowed_tokens[len(self.allowed_tokens.keys())] = set([eos_id])
+
+        sep = tokenizer("Response:", add_special_tokens=False)["input_ids"]
+
+        def find_last_sublist(lst, sub):
+            if not sub:
+                return None
+            n, m = len(lst), len(sub)
+            for start in range(n - m, -1, -1):
+                if lst[start:start + m] == sub:
+                    return start
+            return None
 
         def prefix_allowed_tokens_fn(batch_id, sentence):
             sentence = sentence.tolist()
-            reversed_sent = sentence[::-1]
-            for i in range(len(reversed_sent)):
-                if reversed_sent[i:i + len(sep)] == sep[::-1]:
-                    # print(list(self.allowed_tokens[i]))
-                    return list(self.allowed_tokens[i])
+            # 在已生成前缀中定位 "Response:" 的最后一次出现
+            pos = find_last_sublist(sentence, sep)
+            if pos is None:
+                # 未定位到分隔符时，不进行约束
+                # 返回全词表以避免报错（HF 期望返回可用 token 列表）
+                try:
+                    vocab_size = getattr(tokenizer, 'vocab_size', None) or len(tokenizer)
+                except Exception:
+                    vocab_size = 50257
+                return list(range(vocab_size))
+
+            # 第几个 response token（从 0 开始）
+            gen_pos = len(sentence) - (pos + len(sep))
+            if gen_pos in self.allowed_tokens:
+                return list(self.allowed_tokens[gen_pos])
+            else:
+                # 超过最大长度后，只允许结束
+                last_key = max(self.allowed_tokens.keys())
+                return list(self.allowed_tokens[last_key])
 
         return prefix_allowed_tokens_fn
 

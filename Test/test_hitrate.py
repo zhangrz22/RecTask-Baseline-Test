@@ -545,20 +545,30 @@ def test_single(args):
                 decoded = tokenizer.batch_decode(output_ids, skip_special_tokens=True)
 
                 # 可选：打印生成（每条样本的 Prompt/Think/Top-k 候选与分数）
-                if args.print_generations and scores is not None:
-                    scores_list = [float(s) for s in scores.detach().cpu().tolist()] if hasattr(scores, 'detach') else [float(s) for s in scores]
+                if args.print_generations:
+                    if scores is not None:
+                        if hasattr(scores, 'detach'):
+                            scores_list = [float(s) for s in scores.detach().cpu().tolist()]
+                        else:
+                            scores_list = [float(s) for s in scores]
+                    else:
+                        scores_list = [float('nan')] * len(decoded)
+
                     for i in range(bs):
                         start = i * num_beams
                         end = start + num_beams
                         cands = decoded[start:end]
                         cand_scores = scores_list[start:end]
-                        print("----- SAMPLE {} -----".format(i))
-                        print("PROMPT:\n{}".format(inputs_texts[i]))
+                        print("----- SAMPLE {} -----".format(i), flush=True)
+                        print("PROMPT:\n{}".format(inputs_texts[i]), flush=True)
                         if args.enable_cot:
-                            print("THINK:\n{}".format(think_texts[i]))
-                        print("RESPONSE_CANDIDATES:")
+                            print("THINK:\n{}".format(think_texts[i]), flush=True)
+                        print("RESPONSE_CANDIDATES:", flush=True)
                         for c, sc in zip(cands, cand_scores):
-                            print(f"  - score={sc:.4f} text={c}")
+                            try:
+                                print(f"  - score={sc:.4f} text={c}", flush=True)
+                            except Exception:
+                                print(f"  - score={sc} text={c}", flush=True)
 
                 topk_res = get_topk_results(
                     decoded, scores, targets, num_beams,

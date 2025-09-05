@@ -14,7 +14,8 @@ TS=$(date +%Y%m%d_%H%M%S)
 LOG=logs/eval_${TS}.log
 PIDFILE=logs/eval_${TS}.pid
 
-nohup python test_hitrate.py \
+export TOKENIZERS_PARALLELISM=false
+nohup python -u test_hitrate.py \
   --ckpt_path "${CKPT_PATH}" \
   --test_prompt_ids all \
   --filter_items \
@@ -30,4 +31,4 @@ nohup python test_hitrate.py \
   "$@" > "$LOG" 2>&1 &
 
 echo $! > "$PIDFILE"
-echo "Started eval. PID=$(cat $PIDFILE). Logs: $LOG"
+echo "Started eval. Logs: $LOG"

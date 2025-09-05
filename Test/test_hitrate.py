@@ -233,11 +233,11 @@ def test_ddp(args):
     if local_rank == 0:
         print("args:", vars(args))
     # 加载 tokenizer 与模型（不要使用 device_map="auto"）
-    merged_model_path = '/home/baohonghui/ckpt/hf_model_step2790'
-    tokenizer = AutoTokenizer.from_pretrained(merged_model_path)
+    model_path = args.ckpt_path if args.ckpt_path else "/llm-reco-ssd-share/baohonghui/think_pretrain/results/pretrain_only_te/hf_model_step3234_final"
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
 
     model = AutoModelForCausalLM.from_pretrained(
-        merged_model_path,
+        model_path,
         torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
     )
     model.to(device)
@@ -298,13 +298,18 @@ def test_ddp(args):
             total = 0
 
             for step, batch in enumerate(tqdm(test_loader, desc=f"Rank{rank} Prompt{prompt_id}")):
-                # collator 返回的结构与你原来一致： batch[0] 是 inputs, batch[1] 是 targets
-                inputs = batch[0]
-                targets = batch[1]
+                # collator 返回 {"inputs": list[str], "targets": list[str]}
+                inputs_texts = batch["inputs"]
+                targets = batch["targets"]
 
-                # 把 tensor 放到对应 device
-                # 假设 inputs 是字典形式
-                inputs = {k: v.to(device) for k, v in inputs.items()}
+                enc = tokenizer(
+                    inputs_texts,
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True,
+                    max_length=tokenizer.model_max_length
+                )
+                enc = {k: v.to(device) for k, v in enc.items()}
                 bs = len(targets)
 
                 num_beams = args.num_beams
@@ -312,8 +317,8 @@ def test_ddp(args):
                     try:
                         # 使用 model.module.generate，因为 model 被 DDP 包裹
                         output = model.module.generate(
-                            input_ids=inputs["input_ids"],
-                            attention_mask=inputs.get("attention_mask", None),
+                            input_ids=enc["input_ids"],
+                            attention_mask=enc.get("attention_mask", None),
                             max_new_tokens=10,
                             prefix_allowed_tokens_fn=prefix_allowed_tokens,
                             num_beams=num_beams,
@@ -393,11 +398,11 @@ def test_single(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # --- 加载 tokenizer 和模型 ---
-    merged_model_path = '/home/baohonghui/ckpt/hf_model_step2790'
-    tokenizer = AutoTokenizer.from_pretrained(merged_model_path)
+    model_path = args.ckpt_path if args.ckpt_path else "/llm-reco-ssd-share/baohonghui/think_pretrain/results/pretrain_only_te/hf_model_step3234_final"
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
 
     model = AutoModelForCausalLM.from_pretrained(
-        merged_model_path,
+        model_path,
         torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
     )
     model.to(device)
@@ -445,17 +450,25 @@ def test_single(args):
             total = 0
 
             for step, batch in enumerate(tqdm(test_loader, desc=f"Prompt{prompt_id}")):
-                inputs, targets = batch
-                # print(f"inputs={inputs}, targets={targets}")
-                inputs = {k: v.to(device) for k, v in inputs.items()}
+                # TestCollator 返回 {"inputs": list[str], "targets": list[str]}
+                inputs_texts = batch["inputs"]
+                targets = batch["targets"]
+                enc = tokenizer(
+                    inputs_texts,
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True,
+                    max_length=tokenizer.model_max_length
+                )
+                enc = {k: v.to(device) for k, v in enc.items()}
                 bs = len(targets)
 
                 num_beams = args.num_beams
                 while True:
                     try:
                         output = model.generate(
-                            input_ids=inputs["input_ids"],
-                            attention_mask=inputs.get("attention_mask", None),
+                            input_ids=enc["input_ids"],
+                            attention_mask=enc.get("attention_mask", None),
                             max_new_tokens=10,
                             prefix_allowed_tokens_fn=prefix_allowed_tokens,
                             num_beams=num_beams,

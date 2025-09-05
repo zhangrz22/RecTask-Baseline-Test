@@ -135,6 +135,14 @@ def parse_test_args(parser):
                         help="test metrics, separate by comma")
     parser.add_argument("--test_task", type=str, default="SeqRec")
 
+    # CoT/diagnostics
+    parser.add_argument("--enable_cot", action="store_true", default=False,
+                        help="enable two-stage generation: Think then constrained Response")
+    parser.add_argument("--think_max_tokens", type=int, default=64,
+                        help="max new tokens for the Think stage")
+    parser.add_argument("--print_generations", action="store_true", default=False,
+                        help="print prompts, think, and response candidates")
+
 
     return parser
 
@@ -453,15 +461,58 @@ def test_single(args):
                 # TestCollator 返回 {"inputs": list[str], "targets": list[str]}
                 inputs_texts = batch["inputs"]
                 targets = batch["targets"]
+                bs = len(targets)
+
+                # === Stage 1: Think (optional) ===
+                think_texts = [""] * bs
+                if args.enable_cot:
+                    think_inputs_texts = [f"{msg}\nThink:" for msg in inputs_texts]
+                    enc_think = tokenizer(
+                        think_inputs_texts,
+                        return_tensors="pt",
+                        padding=True,
+                        truncation=True,
+                        max_length=tokenizer.model_max_length
+                    )
+                    enc_think = {k: v.to(device) for k, v in enc_think.items()}
+
+                    think_output = model.generate(
+                        input_ids=enc_think["input_ids"],
+                        attention_mask=enc_think.get("attention_mask", None),
+                        max_new_tokens=args.think_max_tokens,
+                        num_beams=1,
+                        do_sample=False,
+                        return_dict_in_generate=True,
+                        output_scores=False,
+                        early_stopping=True,
+                    )
+                    think_decoded = tokenizer.batch_decode(think_output["sequences"], skip_special_tokens=True)
+
+                    # 提取每条的 Think 文本（以最后一次 "\nThink:" 为切分点），并去除后续的 "Response:" 片段
+                    for i in range(bs):
+                        full_text = think_decoded[i]
+                        if "\nThink:" in full_text:
+                            think_part = full_text.split("\nThink:")[-1]
+                        else:
+                            think_part = ""
+                        if "Response:" in think_part:
+                            think_part = think_part.split("Response:")[0]
+                        think_texts[i] = think_part.strip()
+
+                # === Stage 2: Response (constrained) ===
+                if args.enable_cot:
+                    response_inputs_texts = [f"{msg}\nThink:{think_texts[i]}\nResponse:" for i, msg in enumerate(inputs_texts)]
+                else:
+                    response_inputs_texts = [f"{msg}\nResponse:" for msg in inputs_texts]
+
                 enc = tokenizer(
-                    inputs_texts,
+                    response_inputs_texts,
                     return_tensors="pt",
                     padding=True,
                     truncation=True,
                     max_length=tokenizer.model_max_length
                 )
                 enc = {k: v.to(device) for k, v in enc.items()}
-                bs = len(targets)
 
                 num_beams = args.num_beams
                 while True:
@@ -492,6 +543,22 @@ def test_single(args):
                 output_ids = output["sequences"]
                 scores = output.get("sequences_scores", None)
                 decoded = tokenizer.batch_decode(output_ids, skip_special_tokens=True)
+
+                # 可选：打印生成（每条样本的 Prompt/Think/Top-k 候选与分数）
+                if args.print_generations and scores is not None:
+                    scores_list = [float(s) for s in scores.detach().cpu().tolist()] if hasattr(scores, 'detach') else [float(s) for s in scores]
+                    for i in range(bs):
+                        start = i * num_beams
+                        end = start + num_beams
+                        cands = decoded[start:end]
+                        cand_scores = scores_list[start:end]
+                        print("----- SAMPLE {} -----".format(i))
+                        print("PROMPT:\n{}".format(inputs_texts[i]))
+                        if args.enable_cot:
+                            print("THINK:\n{}".format(think_texts[i]))
+                        print("RESPONSE_CANDIDATES:")
+                        for c, sc in zip(cands, cand_scores):
+                            print(f"  - score={sc:.4f} text={c}")
 
                 topk_res = get_topk_results(
                     decoded, scores, targets, num_beams,

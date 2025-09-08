@@ -135,6 +135,19 @@ if __name__ == '__main__':
             model.train()
     
         if epoch == args.num_epochs:
+            # Final evaluation
+            model.eval()
+            t1 = time.time() - t0
+            T += t1
+            print('Final Evaluation', end='')
+            t_test = evaluate(model, dataset, args)
+            t_valid = evaluate_valid(model, dataset, args)
+            print('epoch:%d, time: %f(s), valid (NDCG@10: %.4f, HR@10: %.4f), test (NDCG@10: %.4f, HR@10: %.4f)'
+                    % (epoch, T, t_valid[0], t_valid[1], t_test[0], t_test[1]))
+            f.write(str(epoch) + ' ' + str(t_valid) + ' ' + str(t_test) + '\n')
+            f.flush()
+            
+            # Save final model
             folder = args.train_dir
             fname = 'SASRec.epoch={}.lr={}.layer={}.head={}.hidden={}.maxlen={}.pth'
             fname = fname.format(args.num_epochs, args.lr, args.num_blocks, args.num_heads, args.hidden_units, args.maxlen)

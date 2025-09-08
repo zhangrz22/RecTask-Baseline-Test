@@ -3,12 +3,20 @@ import copy
 import torch
 import random
 import numpy as np
+import os
 from collections import defaultdict
 from multiprocessing import Process, Queue
 
 def build_index(dataset_name):
+    # Check if the dataset file exists in the data directory
+    data_file = 'data/%s.txt' % dataset_name
+    if not os.path.exists(data_file):
+        # If not found, try to use data_long_format.txt as fallback
+        data_file = 'data/data_long_format.txt'
+        if not os.path.exists(data_file):
+            raise FileNotFoundError(f"Data file not found: data/{dataset_name}.txt or data/data_long_format.txt")
 
-    ui_mat = np.loadtxt('data/%s.txt' % dataset_name, dtype=np.int32)
+    ui_mat = np.loadtxt(data_file, dtype=np.int32)
 
     n_users = ui_mat[:, 0].max()
     n_items = ui_mat[:, 1].max()
@@ -101,7 +109,16 @@ def data_partition(fname):
     user_valid = {}
     user_test = {}
     # assume user/item index starting from 1
-    f = open('data/%s.txt' % fname, 'r')
+    
+    # Check if the dataset file exists in the data directory
+    data_file = 'data/%s.txt' % fname
+    if not os.path.exists(data_file):
+        # If not found, try to use data_long_format.txt as fallback
+        data_file = 'data/data_long_format.txt'
+        if not os.path.exists(data_file):
+            raise FileNotFoundError(f"Data file not found: data/{fname}.txt or data/data_long_format.txt")
+    
+    f = open(data_file, 'r')
     for line in f:
         u, i = line.rstrip().split(' ')
         u = int(u)
@@ -138,7 +155,9 @@ def evaluate(model, dataset, args):
     else:
         users = range(1, usernum + 1)
     for u in users:
-
+        # Check if user exists in all dictionaries
+        if u not in train or u not in test or u not in valid:
+            continue
         if len(train[u]) < 1 or len(test[u]) < 1: continue
 
         seq = np.zeros([args.maxlen], dtype=np.int32)
@@ -186,6 +205,9 @@ def evaluate_valid(model, dataset, args):
     else:
         users = range(1, usernum + 1)
     for u in users:
+        # Check if user exists in all dictionaries
+        if u not in train or u not in valid:
+            continue
         if len(train[u]) < 1 or len(valid[u]) < 1: continue
 
         seq = np.zeros([args.maxlen], dtype=np.int32)

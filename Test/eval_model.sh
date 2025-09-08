@@ -4,7 +4,7 @@
 # Example:
 #   ./Test/eval_model.sh --test_batch_size 2 --num_beams 20
 
-CKPT_DEFAULT="/llm-reco-ssd-share/baohonghui/think_pretrain/results/pretrain_only_te/hf_model_step3234_final"
+CKPT_DEFAULT="/llm-reco-ssd-share/baohonghui/think_pretrain/results/pretrain_clean/hf_model_step2790"
 CKPT_PATH="$CKPT_DEFAULT"
 
 mkdir -p logs

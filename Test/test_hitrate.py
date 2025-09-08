@@ -318,7 +318,7 @@ def test_single(args):
         test_data,
         batch_size=args.test_batch_size,
         collate_fn=collator,
-        shuffle=False,  # 单卡就不需要 DistributedSampler
+        shuffle=False,
         num_workers=2,
         pin_memory=True
     )

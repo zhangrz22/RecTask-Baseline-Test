@@ -42,11 +42,8 @@ nohup deepspeed --hostfile=./hostfile \
     --data_dir ./data \
     --train_file train.parquet \
     --validation_file val.parquet \
-    --max_seq_length 1024 \
-    --use_lora true \
-    --lora_rank 64 \
-    --lora_alpha 128 \
-    --lora_dropout 0.1 \
+    --max_seq_length 256 \
+    --max_token_range 256 \
     --output_dir ./results/sid_mapping_model \
     --logging_dir ./logs/sid_mapping \
     --per_device_train_batch_size 2 \

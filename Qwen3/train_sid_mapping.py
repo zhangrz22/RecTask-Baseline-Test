@@ -30,21 +30,9 @@ class ModelArguments:
         default="./model/Qwen3-1-7B-expanded-vocab",
         metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"}
     )
-    use_lora: bool = field(
-        default=True,
-        metadata={"help": "Whether to use LoRA fine-tuning"}
-    )
-    lora_rank: int = field(
-        default=64,
-        metadata={"help": "LoRA rank"}
-    )
-    lora_alpha: int = field(
-        default=128, 
-        metadata={"help": "LoRA alpha"}
-    )
-    lora_dropout: float = field(
-        default=0.1,
-        metadata={"help": "LoRA dropout"}
+    max_token_range: int = field(
+        default=256,
+        metadata={"help": "Maximum range for special SID tokens (s_a_*, s_b_*, s_c_*, s_d_*)"}
     )
 
 @dataclass 
@@ -163,7 +151,7 @@ def tokenize_function(examples, tokenizer, max_length):
 
 def setup_model_and_tokenizer(model_args):
     """
-    Setup model and tokenizer with LoRA configuration
+    Setup model and tokenizer with TrainableTokensConfig
     
     Args:
         model_args: Model arguments
@@ -185,38 +173,30 @@ def setup_model_and_tokenizer(model_args):
         device_map="auto" if torch.cuda.is_available() else None,
     )
     
-    if model_args.use_lora:
-        print("Setting up LoRA configuration...")
-        
-        # Get special token IDs for TrainableTokensConfig
-        special_token_ids = get_special_token_ids(tokenizer)
-        
-        if special_token_ids:
-            # Use TrainableTokensConfig to train special tokens
-            lora_config = TrainableTokensConfig(
-                token_indices=special_token_ids,
-                target_modules=["embed_tokens", "lm_head"],  # Train both input and output embeddings
-                init_weights=True
-            )
-        else:
-            # Fallback to regular LoRA
-            print("No special tokens found, using regular LoRA")
-            lora_config = LoraConfig(
-                task_type=TaskType.CAUSAL_LM,
-                r=model_args.lora_rank,
-                lora_alpha=model_args.lora_alpha,
-                lora_dropout=model_args.lora_dropout,
-                target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-                bias="none",
-            )
-        
-        model = get_peft_model(model, lora_config)
-        model.print_trainable_parameters()
-        
-        # Print trainable parameters for debugging
-        for name, param in model.named_parameters():
-            if param.requires_grad:
-                print(f"Trainable parameter: {name}")
+    print("Setting up TrainableTokensConfig...")
+    
+    # Get special token IDs for TrainableTokensConfig
+    special_token_ids = get_special_token_ids(tokenizer, model_args.max_token_range)
+    
+    if not special_token_ids:
+        raise ValueError("No special tokens found! Please check your expanded vocabulary.")
+    
+    print(f"Training {len(special_token_ids)} special tokens")
+    
+    # Use TrainableTokensConfig to train only embed_tokens (weight sharing with lm_head)
+    lora_config = TrainableTokensConfig(
+        token_indices=special_token_ids,
+        target_modules=["embed_tokens"],  # Only train input embeddings (lm_head shares weights)
+        init_weights=True
+    )
+    
+    model = get_peft_model(model, lora_config)
+    model.print_trainable_parameters()
+    
+    # Print trainable parameters for debugging
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            print(f"Trainable parameter: {name}")
     
     return model, tokenizer
 

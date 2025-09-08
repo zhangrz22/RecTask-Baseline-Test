@@ -64,12 +64,21 @@ def parse_args():
     parser.add_argument("--filter_items", action="store_true", default=False,
                         help="whether filter illegal items")
     
+    # CoT/diagnostics
+    parser.add_argument("--enable_cot", action="store_true", default=False,
+                        help="enable two-stage generation: Think then constrained Response")
+    parser.add_argument("--think_max_tokens", type=int, default=64,
+                        help="max new tokens for the Think stage")
+    parser.add_argument("--print_generations", action="store_true", default=False,
+                        help="print prompts, think, and response candidates")
+    
     # 输出参数
     parser.add_argument("--results_file", type=str,
                         default="./results/qwen3_test_results.json",
                         help="result output path")
-    parser.add_argument("--print_generations", action="store_true", default=False,
-                        help="print prompts and response candidates")
+    parser.add_argument("--log_file", type=str,
+                        default="./results/qwen3_test_detailed.log",
+                        help="detailed log file path")
     
     return parser.parse_args()
 
@@ -152,19 +161,54 @@ def test_tokenization(tokenizer):
         print("✅ SID token识别正常")
         return True
 
+def setup_logging(log_file):
+    """设置详细日志"""
+    os.makedirs(os.path.dirname(log_file), exist_ok=True)
+    
+    # 创建logger
+    logger = logging.getLogger('qwen3_test')
+    logger.setLevel(logging.DEBUG)
+    
+    # 清除已有handlers
+    if logger.handlers:
+        logger.handlers.clear()
+    
+    # 文件handler
+    file_handler = logging.FileHandler(log_file, mode='w', encoding='utf-8')
+    file_handler.setLevel(logging.DEBUG)
+    
+    # 控制台handler
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    
+    # formatter
+    formatter = logging.Formatter('[%(asctime)s] %(levelname)s: %(message)s')
+    file_handler.setFormatter(formatter)
+    console_handler.setFormatter(formatter)
+    
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+    
+    return logger
+
 def run_hitrate_test(args):
     """运行Hit Rate测试"""
     set_seed(args.seed)
+    
+    # 设置日志
+    logger = setup_logging(args.log_file)
+    logger.info("🧪 Starting Qwen3 Hit Rate Test")
+    logger.info(f"Args: {vars(args)}")
     
     # 1. 加载模型
     model, tokenizer = load_qwen3_model(args)
     
     # 2. 测试tokenization
     if not test_tokenization(tokenizer):
-        print("⚠️  SID tokenization可能有问题，但继续测试...")
+        logger.warning("SID tokenization可能有问题，但继续测试...")
     
     # 3. 加载数据集
-    print("\n📊 Loading test dataset...")
+    logger.info("📊 Loading test dataset...")
     test_data = SeqRecDataset(args, "test", sample_num=args.sample_num)
     collator = TestCollator(args, tokenizer)
     all_items = test_data.get_all_items()
@@ -179,14 +223,14 @@ def run_hitrate_test(args):
         pin_memory=True
     )
     
-    print(f"📈 Test data size: {len(test_data)}")
+    logger.info(f"📈 Test data size: {len(test_data)}")
     
     # 4. 开始测试
     metrics = args.metrics.split(",")
     metrics_results = {}
     total = 0
     
-    print("\n🚀 Starting Hit Rate evaluation...")
+    logger.info("🚀 Starting Hit Rate evaluation...")
     
     with torch.no_grad():
         for step, batch in enumerate(tqdm(test_loader, desc="Testing")):
@@ -194,9 +238,51 @@ def run_hitrate_test(args):
             targets = batch["targets"]
             bs = len(targets)
             
+            # === Stage 1: Think (optional) ===
+            think_texts = [""] * bs
+            if args.enable_cot:
+                think_inputs_texts = [f"{msg}\nThink:" for msg in inputs_texts]
+                enc_think = tokenizer(
+                    think_inputs_texts,
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True,
+                    max_length=tokenizer.model_max_length
+                )
+                enc_think = {k: v.to(model.device) for k, v in enc_think.items()}
+
+                think_output = model.generate(
+                    input_ids=enc_think["input_ids"],
+                    attention_mask=enc_think.get("attention_mask", None),
+                    max_new_tokens=args.think_max_tokens,
+                    num_beams=1,
+                    do_sample=False,
+                    return_dict_in_generate=True,
+                    output_scores=False,
+                    early_stopping=True,
+                )
+                think_decoded = tokenizer.batch_decode(think_output["sequences"], skip_special_tokens=True)
+
+                # 提取每条的 Think 文本
+                for i in range(bs):
+                    full_text = think_decoded[i]
+                    if "\nThink:" in full_text:
+                        think_part = full_text.split("\nThink:")[-1]
+                    else:
+                        think_part = ""
+                    if "Response:" in think_part:
+                        think_part = think_part.split("Response:")[0]
+                    think_texts[i] = think_part.strip()
+
+            # === Stage 2: Response (constrained) ===
+            if args.enable_cot:
+                response_inputs_texts = [f"{msg}\nThink:{think_texts[i]}\nResponse:" for i, msg in enumerate(inputs_texts)]
+            else:
+                response_inputs_texts = [f"{msg}\nResponse:" for msg in inputs_texts]
+            
             # 编码输入
             enc = tokenizer(
-                inputs_texts,
+                response_inputs_texts,
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
@@ -223,7 +309,7 @@ def run_hitrate_test(args):
                 except RuntimeError as e:
                     err = str(e).lower()
                     if "out of memory" in err or "cuda" in err:
-                        print(f"CUDA OOM with beam={num_beams}. Reducing beam size.")
+                        logger.warning(f"CUDA OOM with beam={num_beams}. Reducing beam size.")
                         num_beams -= 1
                         if num_beams < 1:
                             raise RuntimeError("Beam search OOM even with beam=1") from e
@@ -236,14 +322,31 @@ def run_hitrate_test(args):
             scores = output.get("sequences_scores", None)
             decoded = tokenizer.batch_decode(output_ids, skip_special_tokens=True)
             
-            # 可选：打印生成结果
-            if args.print_generations and step < 3:  # 只打印前3个batch
-                print(f"\n--- Sample {step} ---")
-                print(f"Input: {inputs_texts[0][:100]}...")
-                print(f"Target: {targets[0]}")
-                for i, (text, score) in enumerate(zip(decoded[:num_beams], scores[:num_beams])):
-                    response = text.split("Response:")[-1].strip() if "Response:" in text else text
-                    print(f"  Rank {i+1}: {response} (score: {score:.4f})")
+            # 详细日志记录和生成结果打印
+            if args.print_generations:
+                if scores is not None:
+                    if hasattr(scores, 'detach'):
+                        scores_list = [float(s) for s in scores.detach().cpu().tolist()]
+                    else:
+                        scores_list = [float(s) for s in scores]
+                else:
+                    scores_list = [float('nan')] * len(decoded)
+
+                for i in range(bs):
+                    start = i * num_beams
+                    end = start + num_beams
+                    cands = decoded[start:end]
+                    cand_scores = scores_list[start:end]
+                    
+                    logger.debug(f"----- SAMPLE {step*bs + i} -----")
+                    logger.debug(f"PROMPT:\n{inputs_texts[i]}")
+                    if args.enable_cot:
+                        logger.debug(f"THINK:\n{think_texts[i]}")
+                    logger.debug("RESPONSE_CANDIDATES:")
+                    for c, sc in zip(cands, cand_scores):
+                        response = c.split("Response:")[-1].strip() if "Response:" in c else c
+                        logger.debug(f"  - score={sc:.4f} text={response}")
+                    logger.debug(f"TARGET: {targets[i]}")
             
             # 计算topk结果
             topk_res = get_topk_results(
@@ -260,18 +363,18 @@ def run_hitrate_test(args):
             # 中间进度汇报
             if (step + 1) % 50 == 0:
                 temp_results = {m: metrics_results[m] / total for m in metrics_results}
-                print(f"\n[Progress] Step {step+1}, Metrics: {temp_results}")
+                logger.info(f"[Progress] Step {step+1}, Metrics: {temp_results}")
     
     # 5. 最终结果
     for m in metrics_results:
         metrics_results[m] = metrics_results[m] / total if total > 0 else 0.0
     
-    print("\n" + "="*60)
-    print("🎯 Final Hit Rate Results:")
-    print("="*60)
+    logger.info("="*60)
+    logger.info("🎯 Final Hit Rate Results:")
+    logger.info("="*60)
     for metric, value in metrics_results.items():
-        print(f"{metric:>10}: {value:.4f}")
-    print("="*60)
+        logger.info(f"{metric:>10}: {value:.4f}")
+    logger.info("="*60)
     
     # 6. 保存结果
     os.makedirs(os.path.dirname(args.results_file), exist_ok=True)
@@ -283,7 +386,9 @@ def run_hitrate_test(args):
             "dataset": args.dataset,
             "sample_num": args.sample_num,
             "test_batch_size": args.test_batch_size,
-            "num_beams": args.num_beams
+            "num_beams": args.num_beams,
+            "enable_cot": args.enable_cot,
+            "think_max_tokens": args.think_max_tokens if args.enable_cot else None
         },
         "results": metrics_results,
         "total_samples": total
@@ -292,7 +397,8 @@ def run_hitrate_test(args):
     with open(args.results_file, "w", encoding="utf-8") as f:
         json.dump(results_data, f, indent=2, ensure_ascii=False)
     
-    print(f"💾 Results saved to: {args.results_file}")
+    logger.info(f"💾 Results saved to: {args.results_file}")
+    logger.info(f"📝 Detailed log saved to: {args.log_file}")
     
     return metrics_results
 

@@ -119,20 +119,8 @@ def set_seed(seed):
     torch.backends.cudnn.enabled = False
 
 
-def load_datasets(args):
-    # 简化：只支持seqrec任务
-    train_data = SeqRecDataset(args, mode="train")
-    valid_data = SeqRecDataset(args, mode="valid")
-    return train_data, valid_data
-
 def load_test_dataset(args):
-    # 简化：只支持seqrec任务
     return SeqRecDataset(args, "test", sample_num=args.sample_num)
-
-def load_json(file):
-    with open(file, 'r') as f:
-        data = json.load(f)
-    return data
 
 
 def test_ddp(args):

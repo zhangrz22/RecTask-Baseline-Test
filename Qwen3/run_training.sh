@@ -49,10 +49,11 @@ nohup deepspeed --hostfile=./hostfile \
     --per_device_train_batch_size 2 \
     --per_device_eval_batch_size 2 \
     --gradient_accumulation_steps 4 \
-    --num_train_epochs 3 \
+    --num_train_epochs 10 \
     --learning_rate 1e-4 \
-    --warmup_ratio 0.1 \
-    --weight_decay 0.01 \
+    --warmup_ratio 0.0 \
+    --lr_scheduler_type constant \
+    --weight_decay 0.0 \
     --logging_steps 10 \
     --save_steps 500 \
     --eval_strategy steps \

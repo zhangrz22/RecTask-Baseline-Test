@@ -107,68 +107,59 @@ def create_training_samples(index_data, item_data, prompt_templates):
 
 def get_prompt_templates():
     """
-    Define various prompt templates for training
+    Define various prompt templates for training with Think tags
     
     Returns:
-        list: List of prompt templates
+        list: List of prompt templates compatible with Qwen3's think format
     """
     templates = [
-        # Simple mapping format
-        "{sid} represents {title}",
-        "{sid} is {title}",
-        "Product {sid}: {title}",
-        "Item {sid} = {title}",
+        # Simple mapping format with think tags
+        "What is {sid}?\n<think>\nThe user is asking about a product ID. I should provide the corresponding product title.\n</think>\n\n{title}",
+        "Can you tell me what {sid} represents?\n<think>\nThis appears to be a product identifier. Let me provide the associated product information.\n</think>\n\n{sid} represents {title}",
+        "{sid} is what product?\n<think>\nI need to identify this product based on its ID.\n</think>\n\n{sid} is {title}",
         
-        # Question-answer format  
-        "What is {sid}? It is {title}",
-        "Q: What does {sid} represent? A: {title}",
-        "Question: What is {sid}? Answer: {title}",
+        # Question-answer format with think
+        "Q: What does {sid} represent? A:\n<think>\nThis is asking for product identification. I should provide the exact product title.\n</think>\n\n{title}",
+        "Identify this product: {sid}\n<think>\nI need to match this product ID to its corresponding title.\n</think>\n\nAnswer: {title}",
         
-        # Natural language format
-        "The product represented by {sid} is {title}",
-        "When you see {sid}, it refers to {title}",
-        "{sid} corresponds to the product: {title}",
+        # Natural conversation format
+        "User: What is {sid}?\nAssistant: <think>\nThe user is asking about a specific product ID. I should provide the product name.\n</think>\n\n{sid} is {title}",
+        "Human: Can you tell me what {sid} is?\nAssistant: <think>\nThis is a product identification request. Let me provide the correct product information.\n</think>\n\n{sid} represents {title}",
         
-        # Instruction format
-        "Identify this product: {sid}\nAnswer: {title}",
-        "Product identification: {sid} -> {title}",
-        
-        # Conversation format
-        "User: What is {sid}?\nAssistant: {sid} represents {title}",
-        "Human: Can you tell me what {sid} is?\nAssistant: {sid} is {title}",
+        # Direct mapping format  
+        "Product {sid}:\n<think>\nI need to provide the product title for this ID.\n</think>\n\n{title}",
+        "{sid} -> \n<think>\nThis looks like a product mapping request.\n</think>\n\n{title}",
+        "The product {sid} is:\n<think>\nI should identify what product this ID corresponds to.\n</think>\n\n{title}",
     ]
     
     return templates
 
-def split_dataset(samples, train_ratio=0.8, val_ratio=0.1, test_ratio=0.1):
+def split_dataset(samples, train_ratio=0.9, val_ratio=0.1):
     """
-    Split dataset into train/validation/test sets
+    Split dataset into train/validation sets (no test set needed for mapping task)
     
     Args:
         samples: List of training samples
-        train_ratio: Ratio for training set
-        val_ratio: Ratio for validation set  
-        test_ratio: Ratio for test set
+        train_ratio: Ratio for training set (default 0.9)
+        val_ratio: Ratio for validation set (default 0.1)
         
     Returns:
-        tuple: (train_samples, val_samples, test_samples)
+        tuple: (train_samples, val_samples)
     """
-    assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6, "Ratios must sum to 1.0"
+    assert abs(train_ratio + val_ratio - 1.0) < 1e-6, "Ratios must sum to 1.0"
     
     # Shuffle samples
     random.shuffle(samples)
     
     total_samples = len(samples)
     train_size = int(total_samples * train_ratio)
-    val_size = int(total_samples * val_ratio)
     
     train_samples = samples[:train_size]
-    val_samples = samples[train_size:train_size + val_size]
-    test_samples = samples[train_size + val_size:]
+    val_samples = samples[train_size:]
     
-    print(f"Dataset split: Train={len(train_samples)}, Val={len(val_samples)}, Test={len(test_samples)}")
+    print(f"Dataset split: Train={len(train_samples)}, Val={len(val_samples)}")
     
-    return train_samples, val_samples, test_samples
+    return train_samples, val_samples
 
 def save_dataset(samples, output_path, format='parquet'):
     """
@@ -232,8 +223,8 @@ def main():
         print("No training samples created. Please check your data files.")
         return
     
-    # Split dataset
-    train_samples, val_samples, test_samples = split_dataset(samples)
+    # Split dataset (9:1 train/val split)
+    train_samples, val_samples = split_dataset(samples)
     
     # Save datasets
     file_extension = 'parquet' if args.format == 'parquet' else 'json' if args.format == 'json' else 'jsonl'
@@ -243,9 +234,6 @@ def main():
                 args.format)
     save_dataset(val_samples, 
                 os.path.join(args.output_dir, f'val.{file_extension}'), 
-                args.format)
-    save_dataset(test_samples, 
-                os.path.join(args.output_dir, f'test.{file_extension}'), 
                 args.format)
     
     # Print sample examples

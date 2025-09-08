@@ -8,17 +8,17 @@ mkdir -p results
 
 # Training parameters
 DATASET="data_long_format"
-TRAIN_DIR="./results"
+TRAIN_DIR="results"
 DEVICE="cuda"  # Change to "cpu" if no GPU available
 BATCH_SIZE=128
 LR=0.001
 MAX_LEN=200
-HIDDEN_UNITS=64
-NUM_BLOCKS=4
+HIDDEN_UNITS=32
+NUM_BLOCKS=2
 NUM_HEADS=1
 NUM_EPOCHS=200
 DROPOUT_RATE=0.1
-L2_EMB=0.0
+L2_EMB=0.001
 
 echo "Starting SaSRec training..."
 echo "Dataset: $DATASET"
@@ -27,7 +27,7 @@ echo "Device: $DEVICE"
 echo ""
 
 # Run training
-python main.py \
+python3 main.py \
     --dataset=$DATASET \
     --train_dir=$TRAIN_DIR \
     --batch_size=$BATCH_SIZE \

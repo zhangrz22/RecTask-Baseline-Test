@@ -73,12 +73,9 @@ def parse_args():
                         help="print prompts, think, and response candidates")
     
     # 输出参数
-    parser.add_argument("--results_file", type=str,
-                        default="./results/qwen3_test_results.json",
-                        help="result output path")
     parser.add_argument("--log_file", type=str,
-                        default="./results/qwen3_test_detailed.log",
-                        help="detailed log file path")
+                        default="./logs/qwen3_test.log",
+                        help="all output log file path")
     
     return parser.parse_args()
 
@@ -91,78 +88,78 @@ def set_seed(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.enabled = False
 
-def load_qwen3_model(args):
+def load_qwen3_model(args, logger):
     """加载Qwen3训练好的模型"""
-    print("="*60)
-    print("🔄 Loading Qwen3 model with PEFT...")
+    logger.info("="*60)
+    logger.info("🔄 Loading Qwen3 model with PEFT...")
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     try:
         # 1. 加载分词器（从LoRA模型目录，包含SID tokens）
-        print("📝 Loading tokenizer...")
+        logger.info("📝 Loading tokenizer...")
         tokenizer = AutoTokenizer.from_pretrained(args.lora_model_path)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
-        print(f"✅ Tokenizer loaded, vocab size: {len(tokenizer)}")
+        logger.info(f"✅ Tokenizer loaded, vocab size: {len(tokenizer)}")
         
         # 2. 加载基础模型
-        print("🏗️ Loading base model...")
+        logger.info("🏗️ Loading base model...")
         base_model = AutoModelForCausalLM.from_pretrained(
             args.base_model_path,
             torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
             device_map="auto"
         )
-        print("✅ Base model loaded")
+        logger.info("✅ Base model loaded")
         
         # 3. 加载并应用LoRA权重
-        print("🔧 Loading LoRA adapter...")
+        logger.info("🔧 Loading LoRA adapter...")
         model = PeftModel.from_pretrained(base_model, args.lora_model_path)
-        print("✅ LoRA adapter loaded")
+        logger.info("✅ LoRA adapter loaded")
         
         # 4. 合并LoRA权重（提高推理速度）
-        print("🔀 Merging LoRA weights...")
+        logger.info("🔀 Merging LoRA weights...")
         model = model.merge_and_unload()
-        print("✅ Weights merged")
+        logger.info("✅ Weights merged")
         
         model.eval()
-        print("="*60)
+        logger.info("="*60)
         
         return model, tokenizer
         
     except Exception as e:
-        print(f"❌ Failed to load model: {e}")
-        print("\n可能的解决方案:")
-        print("1. 检查模型路径是否正确")
-        print("2. 确保PEFT库已安装: pip install peft") 
-        print("3. 检查基础模型是否存在")
+        logger.error(f"❌ Failed to load model: {e}")
+        logger.error("可能的解决方案:")
+        logger.error("1. 检查模型路径是否正确")
+        logger.error("2. 确保PEFT库已安装: pip install peft") 
+        logger.error("3. 检查基础模型是否存在")
         raise
 
-def test_tokenization(tokenizer):
+def test_tokenization(tokenizer, logger):
     """测试SID token的tokenization是否正确"""
-    print("\n=== SID Token测试 ===")
+    logger.info("=== SID Token测试 ===")
     
     test_sid = "<|sid_begin|><s_a_156><s_b_218><s_c_251><s_d_244><|sid_end|>"
     
     # 检查特殊token是否被正确识别
     tokens = tokenizer.tokenize(test_sid)
-    print(f"SID tokenization: {tokens[:5]}...")  # 只显示前5个token
+    logger.info(f"SID tokenization: {tokens[:5]}...")  # 只显示前5个token
     
     # 检查token ID
     token_ids = tokenizer.encode(test_sid, add_special_tokens=False)
-    print(f"Token IDs (first 5): {token_ids[:5]}")
+    logger.info(f"Token IDs (first 5): {token_ids[:5]}")
     
     # 检查是否有UNK token
     unk_id = tokenizer.unk_token_id
     if unk_id in token_ids:
-        print("⚠️  警告: 发现未知token (UNK)，SID token可能未正确加载")
+        logger.warning("⚠️  警告: 发现未知token (UNK)，SID token可能未正确加载")
         return False
     else:
-        print("✅ SID token识别正常")
+        logger.info("✅ SID token识别正常")
         return True
 
 def setup_logging(log_file):
-    """设置详细日志"""
+    """设置详细日志 - 只输出到文件"""
     os.makedirs(os.path.dirname(log_file), exist_ok=True)
     
     # 创建logger
@@ -173,21 +170,15 @@ def setup_logging(log_file):
     if logger.handlers:
         logger.handlers.clear()
     
-    # 文件handler
+    # 只使用文件handler，不输出到控制台
     file_handler = logging.FileHandler(log_file, mode='w', encoding='utf-8')
     file_handler.setLevel(logging.DEBUG)
-    
-    # 控制台handler
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
     
     # formatter
     formatter = logging.Formatter('[%(asctime)s] %(levelname)s: %(message)s')
     file_handler.setFormatter(formatter)
-    console_handler.setFormatter(formatter)
     
     logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
     
     return logger
 
@@ -201,10 +192,10 @@ def run_hitrate_test(args):
     logger.info(f"Args: {vars(args)}")
     
     # 1. 加载模型
-    model, tokenizer = load_qwen3_model(args)
+    model, tokenizer = load_qwen3_model(args, logger)
     
     # 2. 测试tokenization
-    if not test_tokenization(tokenizer):
+    if not test_tokenization(tokenizer, logger):
         logger.warning("SID tokenization可能有问题，但继续测试...")
     
     # 3. 加载数据集
@@ -241,7 +232,13 @@ def run_hitrate_test(args):
             # === Stage 1: Think (optional) ===
             think_texts = [""] * bs
             if args.enable_cot:
+                logger.info(f"🤔 Starting CoT Think stage for batch {step}...")
                 think_inputs_texts = [f"{msg}\nThink:" for msg in inputs_texts]
+                
+                # 调试：打印第一个think input
+                if step < 3:
+                    logger.info(f"Think input example: {think_inputs_texts[0][:200]}...")
+                
                 enc_think = tokenizer(
                     think_inputs_texts,
                     return_tensors="pt",
@@ -262,6 +259,10 @@ def run_hitrate_test(args):
                     early_stopping=True,
                 )
                 think_decoded = tokenizer.batch_decode(think_output["sequences"], skip_special_tokens=True)
+                
+                # 调试：打印原始think输出
+                if step < 3:
+                    logger.info(f"Raw think output example: {think_decoded[0][:300]}...")
 
                 # 提取每条的 Think 文本
                 for i in range(bs):
@@ -273,10 +274,19 @@ def run_hitrate_test(args):
                     if "Response:" in think_part:
                         think_part = think_part.split("Response:")[0]
                     think_texts[i] = think_part.strip()
+                    
+                    # 调试：输出提取的think文本
+                    if step < 3:
+                        logger.info(f"Extracted think text {i}: '{think_texts[i]}'")
+                        
+                logger.info(f"✅ CoT Think stage completed for batch {step}")
 
             # === Stage 2: Response (constrained) ===
             if args.enable_cot:
                 response_inputs_texts = [f"{msg}\nThink:{think_texts[i]}\nResponse:" for i, msg in enumerate(inputs_texts)]
+                # 调试：显示包含think的response input
+                if step < 3:
+                    logger.info(f"Response input with CoT: {response_inputs_texts[0][:300]}...")
             else:
                 response_inputs_texts = [f"{msg}\nResponse:" for msg in inputs_texts]
             
@@ -338,15 +348,19 @@ def run_hitrate_test(args):
                     cands = decoded[start:end]
                     cand_scores = scores_list[start:end]
                     
-                    logger.debug(f"----- SAMPLE {step*bs + i} -----")
-                    logger.debug(f"PROMPT:\n{inputs_texts[i]}")
-                    if args.enable_cot:
-                        logger.debug(f"THINK:\n{think_texts[i]}")
-                    logger.debug("RESPONSE_CANDIDATES:")
-                    for c, sc in zip(cands, cand_scores):
+                    # 使用info级别确保控制台也能看到
+                    logger.info(f"----- SAMPLE {step*bs + i} -----")
+                    logger.info(f"PROMPT:\n{inputs_texts[i]}")
+                    if args.enable_cot and think_texts[i]:
+                        logger.info(f"THINK:\n{think_texts[i]}")
+                    logger.info("RESPONSE_CANDIDATES:")
+                    for j, (c, sc) in enumerate(zip(cands, cand_scores)):
                         response = c.split("Response:")[-1].strip() if "Response:" in c else c
-                        logger.debug(f"  - score={sc:.4f} text={response}")
-                    logger.debug(f"TARGET: {targets[i]}")
+                        logger.info(f"  Rank {j+1}: score={sc:.4f} text={response}")
+                    logger.info(f"TARGET: {targets[i]}")
+                    
+                    # 添加分隔线便于阅读
+                    logger.info("-" * 50)
             
             # 计算topk结果
             topk_res = get_topk_results(
@@ -376,29 +390,18 @@ def run_hitrate_test(args):
         logger.info(f"{metric:>10}: {value:.4f}")
     logger.info("="*60)
     
-    # 6. 保存结果
-    os.makedirs(os.path.dirname(args.results_file), exist_ok=True)
+    # 6. 输出结果摘要到日志
+    logger.info("\n📊 Test Summary:")
+    logger.info(f"Model: {args.base_model_path} + {args.lora_model_path}")
+    logger.info(f"Dataset: {args.dataset}")
+    logger.info(f"Total samples: {total}")
+    logger.info(f"Batch size: {args.test_batch_size}")
+    logger.info(f"Beam size: {args.num_beams}")
+    logger.info(f"CoT enabled: {args.enable_cot}")
+    if args.enable_cot:
+        logger.info(f"Think max tokens: {args.think_max_tokens}")
     
-    results_data = {
-        "model_config": {
-            "base_model_path": args.base_model_path,
-            "lora_model_path": args.lora_model_path,
-            "dataset": args.dataset,
-            "sample_num": args.sample_num,
-            "test_batch_size": args.test_batch_size,
-            "num_beams": args.num_beams,
-            "enable_cot": args.enable_cot,
-            "think_max_tokens": args.think_max_tokens if args.enable_cot else None
-        },
-        "results": metrics_results,
-        "total_samples": total
-    }
-    
-    with open(args.results_file, "w", encoding="utf-8") as f:
-        json.dump(results_data, f, indent=2, ensure_ascii=False)
-    
-    logger.info(f"💾 Results saved to: {args.results_file}")
-    logger.info(f"📝 Detailed log saved to: {args.log_file}")
+    logger.info("\n✅ Testing completed successfully!")
     
     return metrics_results
 
@@ -406,18 +409,11 @@ def main():
     """主函数"""
     args = parse_args()
     
-    print("🧪 Qwen3 Hit Rate Testing")
-    print(f"Base model: {args.base_model_path}")
-    print(f"LoRA model: {args.lora_model_path}")
-    print(f"Dataset: {args.dataset}")
-    print(f"Sample num: {args.sample_num}")
-    
     try:
         results = run_hitrate_test(args)
-        print("\n🎉 Testing completed successfully!")
         return True
     except Exception as e:
-        print(f"\n❌ Testing failed: {e}")
+        # 只在出错时输出到控制台
         import traceback
         traceback.print_exc()
         return False

@@ -166,11 +166,10 @@ def setup_model_and_tokenizer(model_args):
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     
-    # Load model
+    # Load model (remove device_map for DeepSpeed compatibility)
     model = AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path,
         torch_dtype=torch.float16,
-        device_map="auto" if torch.cuda.is_available() else None,
     )
     
     print("Setting up TrainableTokensConfig...")
@@ -207,6 +206,13 @@ def main():
     
     # Set label names for trainer
     training_args.label_names = ["labels"]
+    
+    # Ensure log directories exist
+    os.makedirs(training_args.output_dir, exist_ok=True)
+    os.makedirs(training_args.logging_dir, exist_ok=True)
+    
+    print(f"Output directory: {os.path.abspath(training_args.output_dir)}")
+    print(f"Logging directory: {os.path.abspath(training_args.logging_dir)}")
     
     # Setup model and tokenizer
     model, tokenizer = setup_model_and_tokenizer(model_args)

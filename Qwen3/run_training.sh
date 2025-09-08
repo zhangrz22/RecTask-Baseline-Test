@@ -4,9 +4,9 @@
 
 echo "Starting SID-to-Title mapping fine-tuning..."
 
-# Create necessary directories
-mkdir -p ./results/sid_mapping_model
-mkdir -p ./logs/sid_mapping
+# Create necessary directories with absolute paths
+mkdir -p "$(pwd)/results/sid_mapping_model"
+mkdir -p "$(pwd)/logs/sid_mapping"
 
 # DeepSpeed config (create if not exists)
 if [ ! -f "./ds_config_zero2.json" ]; then
@@ -44,8 +44,8 @@ nohup deepspeed --hostfile=./hostfile \
     --validation_file val.parquet \
     --max_seq_length 256 \
     --max_token_range 256 \
-    --output_dir ./results/sid_mapping_model \
-    --logging_dir ./logs/sid_mapping \
+    --output_dir "$(pwd)/results/sid_mapping_model" \
+    --logging_dir "$(pwd)/logs/sid_mapping" \
     --per_device_train_batch_size 2 \
     --per_device_eval_batch_size 2 \
     --gradient_accumulation_steps 4 \

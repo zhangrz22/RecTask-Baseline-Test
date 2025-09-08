@@ -12,7 +12,7 @@ TS=$(date +%Y%m%d_%H%M%S)
 LOG=logs/eval_${TS}.log
 
 export TOKENIZERS_PARALLELISM=false
-nohup python -u test_hitrate.py \
+nohup python3 -u test_hitrate.py \
   --ckpt_path "${CKPT_PATH}" \
   --filter_items \
   --data_path . \

@@ -15,7 +15,7 @@ from tqdm import tqdm
 from data import SeqRecDataset
 from utils import *
 from collator import TestCollator
-from prompt import all_prompt
+# 已简化：不再需要 all_prompt
 from evaluate import get_topk_results, get_metrics_results
 
 
@@ -158,16 +158,8 @@ def test_ddp(args):
         find_unused_parameters=False
     )
 
-    # --- 数据与 sampler ---
-    if args.test_prompt_ids == "all":
-        if args.test_task.lower() == "seqrec":
-            prompt_ids = range(len(all_prompt["seqrec"]))
-        elif args.test_task.lower() == "itemsearch":
-            prompt_ids = range(len(all_prompt["itemsearch"]))
-        elif args.test_task.lower() == "fusionseqrec":
-            prompt_ids = range(len(all_prompt["fusionseqrec"]))
-    else:
-        prompt_ids = [int(_) for _ in args.test_prompt_ids.split(",")]
+    # 简化：固定使用唯一的prompt（DDP函数已废弃，但保留代码结构）
+    prompt_ids = [0]
 
     test_data = load_test_dataset(args)
     ddp_sampler = DistributedSampler(test_data, num_replicas=world_size, rank=rank, drop_last=False)

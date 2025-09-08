@@ -234,12 +234,12 @@ class SeqRecDataset(BaseDataset):
         return inter_data
 
     def set_prompt(self, prompt_id):
-
-        self.prompt_id = prompt_id
+        # 简化：不再需要设置prompt，因为只有一个固定prompt
+        pass
 
     def __len__(self):
         if self.mode == 'train':
-            return len(self.inter_data) * self.prompt_sample_num
+            return len(self.inter_data)
         elif self.mode == 'valid':
             return len(self.valid_text_data)
         elif self.mode == 'test':
@@ -274,11 +274,8 @@ class SeqRecDataset(BaseDataset):
         if self.mode == 'valid':
             return self.valid_text_data[index]
 
-        idx = index // self.prompt_sample_num
-        d = self.inter_data[idx]
-        # print(index, idx)
+        d = self.inter_data[index]
 
-        # 简化：直接使用固定prompt
         input, output = self._get_text_data(d, self.prompt)
 
         print({"input": input, "output": output})

@@ -12,7 +12,7 @@ import logging
 import re
 import pdb
 import json
-from prompt import sft_prompt, all_prompt
+from prompt import sft_prompt, prompt
 import numpy as np
 
 
@@ -134,7 +134,8 @@ class SeqRecDataset(BaseDataset):
         self.prompt_id = prompt_id
         self.sample_num = sample_num
 
-        self.prompts = all_prompt["seqrec"]
+        # 简化：直接使用固定的prompt
+        self.prompt = prompt
 
 
         # load data
@@ -248,22 +249,11 @@ class SeqRecDataset(BaseDataset):
                     
     def _construct_valid_text(self):
         self.valid_text_data = []
-        if self.sample_valid:
-            all_prompt_ids = range(len(self.prompts))
-            for i in range(len(self.inter_data)):
-                d = self.inter_data[i]
-                prompt_ids = np.random.choice(all_prompt_ids, self.prompt_sample_num, replace=False)
-                for prompt_id in prompt_ids:
-                    prompt = self.prompts[prompt_id]
-                    input, output = self._get_text_data(d, prompt)
-                    self.valid_text_data.append({"input_ids": input, "labels": output})
-        else:
-            self.prompt_sample_num = 1
-            prompt = self.prompts[self.valid_prompt_id]
-            for i in range(len(self.inter_data)):
-                d = self.inter_data[i]
-                input, output = self._get_text_data(d, prompt)
-                self.valid_text_data.append({"input_ids": input, "labels": output})
+        # 简化：直接使用固定prompt
+        for i in range(len(self.inter_data)):
+            d = self.inter_data[i]
+            input, output = self._get_text_data(d, self.prompt)
+            self.valid_text_data.append({"input_ids": input, "labels": output})
 
     def _get_text_data(self, data, prompt):
 
@@ -288,14 +278,8 @@ class SeqRecDataset(BaseDataset):
         d = self.inter_data[idx]
         # print(index, idx)
 
-        if self.mode == 'train':
-            prompt_id = random.randint(0, len(self.prompts) - 1)
-        elif self.mode == 'test':
-            prompt_id = self.prompt_id
-
-        prompt = self.prompts[prompt_id]
-
-        input, output = self._get_text_data(d, prompt)
+        # 简化：直接使用固定prompt
+        input, output = self._get_text_data(d, self.prompt)
 
         print({"input": input, "output": output})
 
@@ -310,7 +294,8 @@ class SeqRecTestDataset(BaseDataset):
         self.prompt_id = prompt_id
         self.sample_num = sample_num
 
-        self.prompt = all_prompt["seqrec"][self.prompt_id]
+        # 简化：直接使用固定prompt
+        self.current_prompt = prompt
 
         # load data
         self._load_data()
@@ -358,9 +343,8 @@ class SeqRecTestDataset(BaseDataset):
         return inter_data
 
     def set_prompt(self, prompt_id):
-        self.prompt_id = prompt_id
-
-        self.prompt = all_prompt["seqrec"][self.prompt_id]
+        # 简化：不再需要设置prompt，因为只有一个固定prompt
+        pass
 
     def __len__(self):
 
@@ -378,6 +362,6 @@ class SeqRecTestDataset(BaseDataset):
     def __getitem__(self, index):
 
         d = self.inter_data[index]
-        input, target = self._get_text_data(d, self.prompt)
+        input, target = self._get_text_data(d, self.current_prompt)
 
         return dict(input_ids=input, labels=target)

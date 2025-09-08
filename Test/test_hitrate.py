@@ -77,39 +77,6 @@ def parse_dataset_args(parser):
 
     return parser
 
-def parse_train_args(parser):
-
-    parser.add_argument("--optim", type=str, default="adamw_torch", help='The name of the optimizer')
-    parser.add_argument("--epochs", type=int, default=4)
-    parser.add_argument("--learning_rate", type=float, default=2e-5)
-    parser.add_argument("--per_device_batch_size", type=int, default=8)
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=2)
-    parser.add_argument("--logging_step", type=int, default=10)
-    parser.add_argument("--model_max_length", type=int, default=2048)
-    parser.add_argument("--weight_decay", type=float, default=0.01)
-
-    parser.add_argument("--lora_r", type=int, default=8)
-    parser.add_argument("--lora_alpha", type=int, default=32)
-    parser.add_argument("--lora_dropout", type=float, default=0.05)
-    parser.add_argument("--lora_target_modules", type=str,
-                        default="q_proj,v_proj,k_proj,o_proj,gate_proj,down_proj,up_proj", help="separate by comma")
-    parser.add_argument("--lora_modules_to_save", type=str,
-                        default="embed_tokens,lm_head", help="separate by comma")
-
-    parser.add_argument("--resume_from_checkpoint", type=str, default=None, help="either training checkpoint or final adapter")
-
-    parser.add_argument("--warmup_ratio", type=float, default=0.01)
-    parser.add_argument("--lr_scheduler_type", type=str, default="cosine")
-    parser.add_argument("--save_and_eval_strategy", type=str, default="epoch")
-    parser.add_argument("--save_and_eval_steps", type=int, default=1000)
-    parser.add_argument("--fp16",  action="store_true", default=False)
-    parser.add_argument("--bf16", action="store_true", default=True)
-    parser.add_argument("--deepspeed", type=str, default="./config/ds_z2_bf16.json")
-    parser.add_argument("--wandb_run_name", type=str, default="default")
-    parser.add_argument("--temperature", type=float, default=1.0)
-
-    return parser
-
 def parse_test_args(parser):
 
     parser.add_argument("--ckpt_path", type=str,
@@ -129,8 +96,7 @@ def parse_test_args(parser):
                         help="test sample number, -1 represents using all test data")
     parser.add_argument("--gpu_id", type=int, default=0,
                         help="GPU ID when testing with single GPU")
-    parser.add_argument("--test_prompt_ids", type=str, default="0",
-                        help="test prompt ids, separate by comma. 'all' represents using all")
+    # 已简化：不再需要prompt选择参数
     parser.add_argument("--metrics", type=str, default="hit@1,hit@5,hit@10,ndcg@5,ndcg@10",
                         help="test metrics, separate by comma")
     parser.add_argument("--test_task", type=str, default="SeqRec")
@@ -162,10 +128,6 @@ def set_seed(seed):
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.enabled = False
-
-def ensure_dir(dir_path):
-
-    os.makedirs(dir_path, exist_ok=True)
 
 
 def load_datasets(args):
@@ -416,16 +378,7 @@ def test_single(args):
     model.to(device)
     model.eval()
 
-    # --- prompt ids ---
-    if args.test_prompt_ids == "all":
-        if args.test_task.lower() == "seqrec":
-            prompt_ids = range(len(all_prompt["seqrec"]))
-        elif args.test_task.lower() == "itemsearch":
-            prompt_ids = range(len(all_prompt["itemsearch"]))
-        elif args.test_task.lower() == "fusionseqrec":
-            prompt_ids = range(len(all_prompt["fusionseqrec"]))
-    else:
-        prompt_ids = [int(_) for _ in args.test_prompt_ids.split(",")]
+    # 简化：固定使用唯一的prompt，不需要复杂的选择逻辑
 
     # --- 数据 ---
     test_data = load_test_dataset(args)
@@ -445,19 +398,13 @@ def test_single(args):
     print("data num:", len(test_data))
 
     metrics = args.metrics.split(",")
-    all_prompt_results = []
+    metrics_results = {}
+    total = 0
 
     with torch.no_grad():
-        for prompt_id in prompt_ids:
-            print("Start prompt:", prompt_id)
-
-            if hasattr(test_loader.dataset, "set_prompt"):
-                test_loader.dataset.set_prompt(prompt_id)
-
-            metrics_results = {}
-            total = 0
-
-            for step, batch in enumerate(tqdm(test_loader, desc=f"Prompt{prompt_id}")):
+        print("Starting evaluation...")
+        
+        for step, batch in enumerate(tqdm(test_loader, desc="Evaluating")):
                 # TestCollator 返回 {"inputs": list[str], "targets": list[str]}
                 inputs_texts = batch["inputs"]
                 targets = batch["targets"]
@@ -583,18 +530,17 @@ def test_single(args):
 
                 if (step + 1) % 50 == 0:
                     temp = {m: metrics_results[m] / total for m in metrics_results}
-                    print(f"[prompt {prompt_id} progress] averaged metrics:", temp)
+                    print(f"[progress] averaged metrics:", temp)
 
-            # prompt 完成，计算平均
-            for m in metrics_results:
-                metrics_results[m] = metrics_results[m] / total if total > 0 else 0.0
+        # 计算最终平均指标
+        for m in metrics_results:
+            metrics_results[m] = metrics_results[m] / total if total > 0 else 0.0
 
-            all_prompt_results.append(metrics_results)
-            print("======================================================")
-            print("Prompt {} results: ".format(prompt_id), metrics_results)
-            print("=========================")
+        print("======================================================")
+        print("Final results:", metrics_results)
+        print("=========================")
 
-    return all_prompt_results
+    return metrics_results
 
 
 if __name__ == "__main__":

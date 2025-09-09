@@ -139,9 +139,9 @@ def setup_model_and_tokenizer(model_args):
     print("="*60)
     print("🔄 Setting up Stage 2 model...")
     
-    # 1. 加载tokenizer（从第一阶段LoRA模型，包含扩展的词汇表）
-    print("📝 Loading tokenizer from stage 1...")
-    tokenizer = AutoTokenizer.from_pretrained(model_args.stage1_lora_path)
+    # 1. 加载tokenizer（从基础模型，包含扩展的词汇表）
+    print("📝 Loading tokenizer from base model...")
+    tokenizer = AutoTokenizer.from_pretrained(model_args.base_model_path)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     

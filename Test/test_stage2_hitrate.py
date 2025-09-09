@@ -29,6 +29,53 @@ from torch.nn.parallel import DistributedDataParallel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import numpy as np
 from torch.utils.data import ConcatDataset
+import pandas as pd
+
+class Stage2ValDataset:
+    """用于Stage 2验证数据的数据集类"""
+    def __init__(self, val_data_path, sample_num=-1):
+        # 加载验证数据
+        self.df = pd.read_parquet(val_data_path)
+        
+        if sample_num > 0:
+            self.df = self.df.head(sample_num)
+        
+        self.data = []
+        for _, row in self.df.iterrows():
+            # 从instruction中提取历史序列
+            instruction = row['instruction']
+            # 从response中提取目标
+            response = row['response']
+            
+            self.data.append({
+                'inputs': instruction,
+                'targets': response
+            })
+    
+    def __len__(self):
+        return len(self.data)
+    
+    def __getitem__(self, idx):
+        return self.data[idx]
+    
+    def get_all_items(self):
+        # 返回所有可能的items（从targets中提取）
+        items = set()
+        for item in self.data:
+            items.add(item['targets'])
+        return list(items)
+    
+    def get_prefix_allowed_tokens_fn(self, tokenizer):
+        # 简化版本，允许所有SID tokens
+        def prefix_allowed_tokens(batch_id, input_ids):
+            # 允许所有特殊tokens
+            allowed_tokens = []
+            vocab = tokenizer.get_vocab()
+            for token, token_id in vocab.items():
+                if token.startswith('<s_') or token in ['<|sid_begin|>', '<|sid_end|>']:
+                    allowed_tokens.append(token_id)
+            return allowed_tokens
+        return prefix_allowed_tokens
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Qwen3 Stage 2 Hit Rate Test")
@@ -47,12 +94,10 @@ def parse_args():
                         default="../Qwen3/results/stage2_recommendation_model", 
                         help="Stage 2 model path")
     
-    # 对比测试参数
-    parser.add_argument("--compare_with_stage1", action="store_true", default=False,
-                        help="Also test Stage 1 model for comparison")
-    parser.add_argument("--stage1_model_path", type=str,
-                        default="../Qwen3/results/sid_mapping_model", 
-                        help="Stage 1 model path (for comparison)")
+    # Stage 2验证数据路径（固定使用）
+    parser.add_argument("--stage2_val_data_path", type=str,
+                        default="../Qwen3/data_stage2/val.parquet", 
+                        help="Path to Stage 2 validation data")
     
     # 数据相关参数
     parser.add_argument("--max_his_len", type=int, default=20,
@@ -425,7 +470,7 @@ def run_model_test(model, tokenizer, test_loader, all_items, prefix_allowed_toke
     return metrics_results
 
 def run_stage2_test(args):
-    """运行Stage 2测试"""
+    """运行Stage 2测试 - 使用训练时预留的验证数据"""
     set_seed(args.seed)
     
     # 设置日志
@@ -433,18 +478,19 @@ def run_stage2_test(args):
     logger.info("🧪 Starting Qwen3 Stage 2 Hit Rate Test")
     logger.info(f"Args: {vars(args)}")
     
-    # 加载数据集（只需要加载一次）
-    logger.info("📊 Loading test dataset...")
-    test_data = SeqRecDataset(args, "test", sample_num=args.sample_num)
-    all_items = test_data.get_all_items()
+    # 加载Stage 2验证数据集（训练时预留的数据）
+    logger.info("📊 Loading Stage 2 validation dataset...")
+    logger.info(f"   Data source: {args.stage2_val_data_path}")
+    logger.info("   Using Stage 2 validation data (preserved from training)")
     
+    test_data = Stage2ValDataset(args.stage2_val_data_path, sample_num=args.sample_num)
+    all_items = test_data.get_all_items()
     logger.info(f"📈 Test data size: {len(test_data)}")
     
-    results = {}
-    
-    # 1. 测试Stage 2模型
+    # 测试完整的Stage 2模型 (Base + Stage1 + Stage2)
     logger.info("\n" + "="*80)
-    logger.info("🎯 Testing Stage 2 Model (Enhanced Recommendation)")
+    logger.info("🎯 Testing Complete Stage 2 Model")
+    logger.info("    Architecture: Base + Stage1(SID映射) + Stage2(推荐增强)")
     logger.info("="*80)
     
     stage2_model, stage2_tokenizer = load_stage2_model(args, logger)
@@ -465,74 +511,27 @@ def run_stage2_test(args):
         pin_memory=True
     )
     
-    results['stage2'] = run_model_test(
+    results = run_model_test(
         stage2_model, stage2_tokenizer, stage2_loader, all_items, 
-        stage2_prefix_allowed_tokens, args, logger, "Stage 2"
+        stage2_prefix_allowed_tokens, args, logger, "Complete Stage 2"
     )
     
-    # 2. 可选：测试Stage 1模型进行对比
-    if args.compare_with_stage1:
-        logger.info("\n" + "="*80)
-        logger.info("🔍 Testing Stage 1 Model for Comparison")
-        logger.info("="*80)
-        
-        stage1_model, stage1_tokenizer = load_stage1_model(args, logger)
-        
-        # 测试tokenization
-        if not test_tokenization(stage1_tokenizer, logger):
-            logger.warning("Stage 1 SID tokenization可能有问题，但继续测试...")
-        
-        stage1_collator = TestCollator(args, stage1_tokenizer)
-        stage1_prefix_allowed_tokens = test_data.get_prefix_allowed_tokens_fn(stage1_tokenizer)
-        
-        stage1_loader = DataLoader(
-            test_data,
-            batch_size=args.test_batch_size,
-            collate_fn=stage1_collator,
-            shuffle=False,
-            num_workers=2,
-            pin_memory=True
-        )
-        
-        results['stage1'] = run_model_test(
-            stage1_model, stage1_tokenizer, stage1_loader, all_items, 
-            stage1_prefix_allowed_tokens, args, logger, "Stage 1"
-        )
-    
-    # 3. 输出最终结果对比
+    # 输出最终结果
     logger.info("\n" + "="*80)
-    logger.info("📊 FINAL RESULTS SUMMARY")
+    logger.info("📊 FINAL RESULTS")
     logger.info("="*80)
     
-    # Stage 2 结果
-    logger.info("🎯 Stage 2 Model (Enhanced Recommendation):")
-    for metric, value in results['stage2'].items():
+    logger.info("🎯 Complete Stage 2 Model Results:")
+    for metric, value in results.items():
         logger.info(f"  {metric:>10}: {value:.4f}")
     
-    if 'stage1' in results:
-        logger.info("\n🔍 Stage 1 Model (SID Mapping Only):")
-        for metric, value in results['stage1'].items():
-            logger.info(f"  {metric:>10}: {value:.4f}")
-        
-        # 计算改进幅度
-        logger.info("\n📈 Improvement (Stage 2 vs Stage 1):")
-        for metric in results['stage2']:
-            if metric in results['stage1']:
-                stage2_val = results['stage2'][metric]
-                stage1_val = results['stage1'][metric]
-                if stage1_val > 0:
-                    improvement = ((stage2_val - stage1_val) / stage1_val) * 100
-                    logger.info(f"  {metric:>10}: {improvement:+.2f}%")
-                else:
-                    logger.info(f"  {metric:>10}: N/A (Stage 1 = 0)")
-    
     logger.info("="*80)
     
-    # 6. 输出测试摘要
+    # 输出测试摘要
     logger.info("\n📋 Test Summary:")
+    logger.info(f"Base Model: {args.base_model_path}")
+    logger.info(f"Stage 1 Model: {args.stage1_model_path}")
     logger.info(f"Stage 2 Model: {args.stage2_model_path}")
-    if args.compare_with_stage1:
-        logger.info(f"Stage 1 Model: {args.stage1_model_path}")
     logger.info(f"Dataset: {args.dataset}")
     logger.info(f"Total samples: {len(test_data)}")
     logger.info(f"Batch size: {args.test_batch_size}")
@@ -541,7 +540,7 @@ def run_stage2_test(args):
     if args.enable_cot:
         logger.info(f"Think max tokens: {args.think_max_tokens}")
     
-    logger.info("\n✅ Stage 2 testing completed successfully!")
+    logger.info("\n✅ Complete Stage 2 model testing completed successfully!")
     
     return results
 

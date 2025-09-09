@@ -167,6 +167,11 @@ def parse_args():
     parser.add_argument("--stage2_val_data_path", type=str,
                         default="../Qwen3/data_stage2/val.parquet", 
                         help="Path to Stage 2 validation data")
+    parser.add_argument("--use_preprocessed", action="store_true", default=False,
+                        help="Use preprocessed data for faster loading")
+    parser.add_argument("--preprocessed_data_path", type=str,
+                        default="../Qwen3/data_stage2/val_preprocessed.json",
+                        help="Path to preprocessed validation data")
     
     # 数据相关参数
     parser.add_argument("--max_his_len", type=int, default=20,
@@ -229,54 +234,66 @@ def load_stage2_model(args, logger):
     
     try:
         # 1. 加载分词器（从Stage 2模型目录，包含扩展词汇）
-        logger.info("📝 Loading tokenizer from Stage 2 model...")
+        if logger:
+            logger.info("📝 Loading tokenizer from Stage 2 model...")
         tokenizer = AutoTokenizer.from_pretrained(args.stage2_model_path, trust_remote_code=True)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
         # 设置左侧padding用于生成任务
         tokenizer.padding_side = "left"
-        logger.info(f"✅ Tokenizer loaded, vocab size: {len(tokenizer)}")
+        if logger:
+            logger.info(f"✅ Tokenizer loaded, vocab size: {len(tokenizer)}")
         
         # 2. 加载基础模型 (扩展词汇表)
-        logger.info("🏗️ Loading base model with expanded vocab...")
+        if logger:
+            logger.info("🏗️ Loading base model with expanded vocab...")
         base_model = AutoModelForCausalLM.from_pretrained(
             args.base_model_path,
             torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
             trust_remote_code=True,
             device_map="auto"
         )
-        logger.info("✅ Base model loaded")
+        if logger:
+            logger.info("✅ Base model loaded")
         
         # 3. 加载并合并Stage 1 LoRA权重 (SID映射能力)
-        logger.info("🔧 Loading and merging Stage 1 LoRA (SID mapping)...")
+        if logger:
+            logger.info("🔧 Loading and merging Stage 1 LoRA (SID mapping)...")
         stage1_model = PeftModel.from_pretrained(base_model, args.stage1_model_path)
         merged_model = stage1_model.merge_and_unload()
-        logger.info("✅ Stage 1 LoRA merged")
+        if logger:
+            logger.info("✅ Stage 1 LoRA merged")
         
         # 4. 加载Stage 2 LoRA权重 (推荐增强能力)
-        logger.info("🎯 Loading Stage 2 LoRA (recommendation enhancement)...")
+        if logger:
+            logger.info("🎯 Loading Stage 2 LoRA (recommendation enhancement)...")
         final_model = PeftModel.from_pretrained(merged_model, args.stage2_model_path)
-        logger.info("✅ Stage 2 LoRA loaded")
+        if logger:
+            logger.info("✅ Stage 2 LoRA loaded")
         
         # 5. 可选：合并Stage 2权重以提高推理速度
-        logger.info("🔀 Merging Stage 2 weights for inference...")
+        if logger:
+            logger.info("🔀 Merging Stage 2 weights for inference...")
         model = final_model.merge_and_unload()
-        logger.info("✅ All weights merged - ready for inference")
+        if logger:
+            logger.info("✅ All weights merged - ready for inference")
         
         model.eval()
-        logger.info("="*60)
+        if logger:
+            logger.info("="*60)
         
         return model, tokenizer
         
     except Exception as e:
-        logger.error(f"❌ Failed to load Stage 2 model: {e}")
-        logger.error("模型架构说明:")
-        logger.error("  Stage 2模型 = Base模型 + Stage1(SID映射) + Stage2(推荐增强)")
-        logger.error("可能的解决方案:")
-        logger.error("1. 检查base_model_path是否正确")
-        logger.error("2. 检查stage1_model_path是否正确") 
-        logger.error("3. 检查stage2_model_path是否正确")
-        logger.error("4. 确保Stage 2训练已完成")
+        if logger:
+            logger.error(f"❌ Failed to load Stage 2 model: {e}")
+            logger.error("模型架构说明:")
+            logger.error("  Stage 2模型 = Base模型 + Stage1(SID映射) + Stage2(推荐增强)")
+            logger.error("可能的解决方案:")
+            logger.error("1. 检查base_model_path是否正确")
+            logger.error("2. 检查stage1_model_path是否正确") 
+            logger.error("3. 检查stage2_model_path是否正确")
+            logger.error("4. 确保Stage 2训练已完成")
         raise
 
 def load_stage1_model(args, logger):
@@ -330,25 +347,30 @@ def load_stage1_model(args, logger):
 
 def test_tokenization(tokenizer, logger):
     """测试SID token的tokenization是否正确"""
-    logger.info("=== SID Token测试 ===")
+    if logger:
+        logger.info("=== SID Token测试 ===")
     
     test_sid = "<|sid_begin|><s_a_156><s_b_218><s_c_251><s_d_244><|sid_end|>"
     
     # 检查特殊token是否被正确识别
     tokens = tokenizer.tokenize(test_sid)
-    logger.info(f"SID tokenization: {tokens[:5]}...")  # 只显示前5个token
+    if logger:
+        logger.info(f"SID tokenization: {tokens[:5]}...")  # 只显示前5个token
     
     # 检查token ID
     token_ids = tokenizer.encode(test_sid, add_special_tokens=False)
-    logger.info(f"Token IDs (first 5): {token_ids[:5]}")
+    if logger:
+        logger.info(f"Token IDs (first 5): {token_ids[:5]}")
     
     # 检查是否有UNK token
     unk_id = tokenizer.unk_token_id
     if unk_id in token_ids:
-        logger.warning("⚠️  警告: 发现未知token (UNK)，SID token可能未正确加载")
+        if logger:
+            logger.warning("⚠️  警告: 发现未知token (UNK)，SID token可能未正确加载")
         return False
     else:
-        logger.info("✅ SID token识别正常")
+        if logger:
+            logger.info("✅ SID token识别正常")
         return True
 
 def setup_logging(log_file):
@@ -424,12 +446,25 @@ def run_stage2_test(args):
     
     # 2. 测试tokenization
     if not test_tokenization(tokenizer, logger):
-        logger.warning("SID tokenization可能有问题，但继续测试...")
+        if logger:
+            logger.warning("SID tokenization可能有问题，但继续测试...")
     
     # 3. 加载数据集
     if local_rank == 0 and logger:
         logger.info("📊 Loading test dataset...")
-    test_data = Stage2ValDataset(args.stage2_val_data_path, sample_num=args.sample_num)
+    
+    if args.use_preprocessed:
+        # 导入预处理数据集类
+        import sys
+        sys.path.append(os.path.dirname(__file__))
+        from preprocess_stage2_data import PreprocessedStage2Dataset
+        test_data = PreprocessedStage2Dataset(args.preprocessed_data_path)
+        if local_rank == 0 and logger:
+            logger.info("✅ Using preprocessed data for faster loading")
+    else:
+        test_data = Stage2ValDataset(args.stage2_val_data_path, sample_num=args.sample_num)
+        if local_rank == 0 and logger:
+            logger.info("⚠️  Using raw data (slower loading)")}
     collator = TestCollator(args, tokenizer)
     all_items = test_data.get_all_items()
     prefix_allowed_tokens = test_data.get_prefix_allowed_tokens_fn(tokenizer)

@@ -160,8 +160,7 @@ def setup_model_and_tokenizer(model_args):
     base_model = AutoModelForCausalLM.from_pretrained(
         model_args.base_model_path,
         torch_dtype=torch.float16,
-        trust_remote_code=True,
-        device_map="auto"
+        trust_remote_code=True
     )
     print("✅ Base model loaded")
     

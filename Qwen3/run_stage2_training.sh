@@ -43,7 +43,8 @@ echo "⏰ Started at: $(date)"
 echo "📝 Log file: $LOG"
 
 # 运行训练
-nohup deepspeed --num_gpus 8 train_recommendation_stage2.py \
+nohup deepspeed --hostfile=./hostfile \
+    --num_gpus 8 train_recommendation_stage2.py \
     --base_model_path ./model/Qwen3-1-7B-expanded-vocab \
     --stage1_lora_path ./results/sid_mapping_model \
     --max_token_range 256 \

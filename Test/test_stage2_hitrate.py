@@ -94,6 +94,11 @@ def parse_args():
                         default="../Qwen3/results/stage2_recommendation_model", 
                         help="Stage 2 model path")
     
+    # Stage 1模型路径（Stage 2需要）
+    parser.add_argument("--stage1_model_path", type=str,
+                        default="../Qwen3/results/sid_mapping_model", 
+                        help="Stage 1 model path (needed for Stage 2 loading)")
+    
     # Stage 2验证数据路径（固定使用）
     parser.add_argument("--stage2_val_data_path", type=str,
                         default="../Qwen3/data_stage2/val.parquet", 
@@ -273,7 +278,7 @@ def test_tokenization(tokenizer, logger):
         return True
 
 def setup_logging(log_file):
-    """设置详细日志 - 只输出到文件"""
+    """设置详细日志 - 输出到文件和控制台"""
     os.makedirs(os.path.dirname(log_file), exist_ok=True)
     
     # 创建logger
@@ -284,15 +289,21 @@ def setup_logging(log_file):
     if logger.handlers:
         logger.handlers.clear()
     
-    # 只使用文件handler，不输出到控制台
+    # 文件handler
     file_handler = logging.FileHandler(log_file, mode='w', encoding='utf-8')
     file_handler.setLevel(logging.DEBUG)
+    
+    # 控制台handler
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
     
     # formatter
     formatter = logging.Formatter('[%(asctime)s] %(levelname)s: %(message)s')
     file_handler.setFormatter(formatter)
+    console_handler.setFormatter(formatter)
     
     logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
     
     return logger
 
@@ -469,12 +480,14 @@ def run_model_test(model, tokenizer, test_loader, all_items, prefix_allowed_toke
     
     return metrics_results
 
-def run_stage2_test(args):
+def run_stage2_test(args, logger=None):
     """运行Stage 2测试 - 使用训练时预留的验证数据"""
     set_seed(args.seed)
     
-    # 设置日志
-    logger = setup_logging(args.log_file)
+    # 如果没有传入logger，创建一个
+    if logger is None:
+        logger = setup_logging(args.log_file)
+    
     logger.info("🧪 Starting Qwen3 Stage 2 Hit Rate Test")
     logger.info(f"Args: {vars(args)}")
     
@@ -548,13 +561,20 @@ def main():
     """主函数"""
     args = parse_args()
     
+    # 设置日志（先创建以便记录错误）
+    logger = setup_logging(args.log_file)
+    
     try:
-        results = run_stage2_test(args)
+        results = run_stage2_test(args, logger)
+        logger.info("✅ Stage 2 testing completed successfully!")
         return True
     except Exception as e:
-        # 只在出错时输出到控制台
+        # 将错误同时输出到日志和控制台
         import traceback
-        traceback.print_exc()
+        error_msg = f"❌ Testing failed: {e}"
+        logger.error(error_msg)
+        logger.error("Traceback:")
+        logger.error(traceback.format_exc())
         return False
 
 if __name__ == "__main__":

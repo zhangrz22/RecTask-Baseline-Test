@@ -19,6 +19,7 @@ echo "    架构: Base Model + Stage1 LoRA (merged) + Stage2 LoRA"
 
 python3 test_stage2_hitrate.py \
     --base_model_path ../Qwen3/model/Qwen3-1-7B-expanded-vocab \
+    --stage1_model_path ../Qwen3/results/sid_mapping_model \
     --stage2_model_path ../Qwen3/results/stage2_recommendation_model \
     --stage2_val_data_path ../Qwen3/data_stage2/val.parquet \
     --test_batch_size 8 \

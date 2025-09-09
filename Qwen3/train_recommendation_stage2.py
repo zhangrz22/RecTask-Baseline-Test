@@ -155,50 +155,15 @@ def setup_model_and_tokenizer(model_args):
     
     print(f"✅ Tokenizer loaded, vocab size: {len(tokenizer)}")
     
-    # 2. 加载第一阶段基础模型（尝试多种策略）
+    # 2. 加载第一阶段基础模型
     print("🏗️ Loading stage 1 base model...")
-    
-    base_model = None
-    
-    # 策略1: 尝试按照Stage 1训练的方式（不使用trust_remote_code）
-    try:
-        print("   尝试策略1: 标准加载...")
-        base_model = AutoModelForCausalLM.from_pretrained(
-            model_args.base_model_path,
-            torch_dtype=torch.float16
-        )
-        print("✅ Base model loaded with strategy 1")
-    except Exception as e:
-        print(f"   策略1失败: {e}")
-        
-        # 策略2: 使用trust_remote_code
-        try:
-            print("   尝试策略2: trust_remote_code...")
-            base_model = AutoModelForCausalLM.from_pretrained(
-                model_args.base_model_path,
-                torch_dtype=torch.float16,
-                trust_remote_code=True
-            )
-            print("✅ Base model loaded with strategy 2")
-        except Exception as e2:
-            print(f"   策略2失败: {e2}")
-            
-            # 策略3: 使用Qwen2.5-1.5B作为fallback
-            try:
-                print("   尝试策略3: Qwen2.5-1.5B fallback...")
-                fallback_model = "Qwen/Qwen2.5-1.5B"
-                base_model = AutoModelForCausalLM.from_pretrained(
-                    fallback_model,
-                    torch_dtype=torch.float16,
-                    trust_remote_code=True
-                )
-                print(f"✅ Base model loaded with fallback: {fallback_model}")
-            except Exception as e3:
-                print(f"   策略3失败: {e3}")
-                raise RuntimeError("所有模型加载策略都失败了")
-    
-    if base_model is None:
-        raise RuntimeError("无法加载基础模型")
+    base_model = AutoModelForCausalLM.from_pretrained(
+        model_args.base_model_path,
+        torch_dtype=torch.float16,
+        trust_remote_code=True,
+        device_map="auto"
+    )
+    print("✅ Base model loaded")
     
     # 3. 加载第一阶段LoRA权重
     print("🔧 Loading stage 1 LoRA weights...")

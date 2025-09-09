@@ -42,14 +42,29 @@ class Stage2ValDataset:
         
         self.data = []
         for _, row in self.df.iterrows():
-            # 从instruction中提取历史序列
-            instruction = row['instruction']
-            # 从response中提取目标
+            # 使用完整的SFT prompt，不只是 instruction
+            if 'text' in row and pd.notna(row['text']):
+                # 如果有完整的text字段，提取指令部分
+                full_text = row['text']
+                # 找到第一个"### "的位置，取其前面的部分作为系统指令
+                if '### ' in full_text:
+                    system_instruction = full_text.split('### ')[0].strip()
+                    instruction_part = full_text.split('### ')[1].strip()
+                    if '### ' in instruction_part:  # 还有response部分
+                        instruction_part = instruction_part.split('### ')[0].strip()
+                    full_prompt = system_instruction + "\n\n" + instruction_part
+                else:
+                    full_prompt = row['instruction']
+            else:
+                # 如果没有text字段，手动构建完整prompt
+                instruction = row['instruction']
+                full_prompt = f"You are an expert in Recommender System. The user has interacted with several items in chronological order. Can you predict the next possible item that the user may expect?\n\n{instruction}"
+            
             response = row['response']
             
             # 匹配TestCollator期望的格式: input_ids, labels
             self.data.append({
-                'input_ids': instruction + "\nResponse:",  # TestCollator会处理这个格式
+                'input_ids': full_prompt,  # 使用完整的prompt
                 'labels': response
             })
     

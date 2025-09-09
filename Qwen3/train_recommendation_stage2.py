@@ -109,11 +109,11 @@ def get_extended_special_tokens(max_range=256):
 
 def tokenize_function(examples, tokenizer, max_length=1024):
     """
-    数据tokenization函数
+    数据tokenization函数 - 使用静态填充避免batch长度不一致问题
     """
     tokenized = tokenizer(
         examples['text'],
-        padding=False,  # 不在这里padding，让DataCollator处理
+        padding="max_length",  # 使用静态填充到max_length
         truncation=True,
         max_length=max_length,
         add_special_tokens=True,
@@ -121,7 +121,7 @@ def tokenize_function(examples, tokenizer, max_length=1024):
     )
     
     # 对于因果语言模型，labels与input_ids相同
-    tokenized['labels'] = tokenized['input_ids']
+    tokenized['labels'] = tokenized['input_ids'].copy()
     
     return tokenized
 
@@ -315,11 +315,11 @@ def main():
     if training_args.local_rank <= 0:
         print("✅ Tokenization completed")
     
-    # 数据收集器
+    # 数据收集器 - 由于已经使用静态填充，DataCollator主要负责堆叠数据
     data_collator = DataCollatorForLanguageModeling(
         tokenizer=tokenizer,
         mlm=False,  # 因果语言模型
-        pad_to_multiple_of=8,
+        pad_to_multiple_of=None,  # 已经静态填充，不需要额外padding
         return_tensors="pt"
     )
     

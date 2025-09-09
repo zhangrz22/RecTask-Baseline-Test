@@ -210,12 +210,22 @@ def set_seed(seed):
     torch.backends.cudnn.enabled = False
 
 def load_stage2_model(args, logger):
-    """加载Stage 2训练好的模型 - 正确的分层加载"""
-    logger.info("="*60)
-    logger.info("🔄 Loading Qwen3 Stage 2 model...")
-    logger.info("   Architecture: Base + Stage1(merged) + Stage2(LoRA)")
+    """加载Stage 2训练好的模型 - 支持多GPU"""
+    if logger:
+        logger.info("="*60)
+        logger.info("🔄 Loading Qwen3 Stage 2 model...")
+        logger.info("   Architecture: Base + Stage1(merged) + Stage2(LoRA)")
     
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # 多GPU环境下不使用device_map="auto"
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    
+    if world_size > 1:
+        device = torch.device(f"cuda:{local_rank}")
+        device_map = None  # DDP会处理设备分配
+    else:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device_map = "auto"
     
     try:
         # 1. 加载分词器（从Stage 2模型目录，包含扩展词汇）
@@ -366,45 +376,96 @@ def setup_logging(log_file):
     return logger
 
 def run_stage2_test(args):
-    """运行Stage 2测试 - 与Stage 1保持完全一致的结构"""
+    """运行Stage 2测试 - 支持多GPU DDP加速"""
     set_seed(args.seed)
     
-    # 设置日志
-    logger = setup_logging(args.log_file)
-    logger.info("🧪 Starting Qwen3 Stage 2 Hit Rate Test")
-    logger.info(f"Args: {vars(args)}")
+    # 多GPU设置
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    rank = int(os.environ.get("RANK", local_rank))
+    
+    if world_size > 1:
+        # 设置当前进程的 GPU
+        torch.cuda.set_device(local_rank)
+        device = torch.device("cuda", local_rank)
+        
+        # 初始化进程组
+        dist.init_process_group(backend="nccl", world_size=world_size, rank=rank)
+        
+        # 只在主进程设置日志
+        if local_rank == 0:
+            logger = setup_logging(args.log_file)
+            logger.info("🧪 Starting Qwen3 Stage 2 Hit Rate Test (Multi-GPU)")
+            logger.info(f"World Size: {world_size}, Local Rank: {local_rank}")
+            logger.info(f"Args: {vars(args)}")
+        else:
+            logger = None
+    else:
+        # 单GPU模式
+        local_rank = 0
+        logger = setup_logging(args.log_file)
+        logger.info("🧪 Starting Qwen3 Stage 2 Hit Rate Test (Single-GPU)")
+        logger.info(f"Args: {vars(args)}")
     
     # 1. 加载模型
     model, tokenizer = load_stage2_model(args, logger)
+    
+    # 多GPU模型包装
+    if world_size > 1:
+        from torch.nn.parallel import DistributedDataParallel
+        model = DistributedDataParallel(
+            model,
+            device_ids=[local_rank],
+            output_device=local_rank,
+            find_unused_parameters=False
+        )
+        if local_rank == 0 and logger:
+            logger.info(f"🚀 Model wrapped with DDP on {world_size} GPUs")
     
     # 2. 测试tokenization
     if not test_tokenization(tokenizer, logger):
         logger.warning("SID tokenization可能有问题，但继续测试...")
     
     # 3. 加载数据集
-    logger.info("📊 Loading test dataset...")
+    if local_rank == 0 and logger:
+        logger.info("📊 Loading test dataset...")
     test_data = Stage2ValDataset(args.stage2_val_data_path, sample_num=args.sample_num)
     collator = TestCollator(args, tokenizer)
     all_items = test_data.get_all_items()
     prefix_allowed_tokens = test_data.get_prefix_allowed_tokens_fn(tokenizer)
     
-    test_loader = DataLoader(
-        test_data,
-        batch_size=args.test_batch_size,
-        collate_fn=collator,
-        shuffle=False,
-        num_workers=2,
-        pin_memory=True
-    )
+    # 多GPU数据加载器
+    if world_size > 1:
+        from torch.utils.data.distributed import DistributedSampler
+        ddp_sampler = DistributedSampler(test_data, shuffle=False)
+        test_loader = DataLoader(
+            test_data,
+            batch_size=args.test_batch_size,
+            collate_fn=collator,
+            sampler=ddp_sampler,
+            num_workers=2,
+            pin_memory=True
+        )
+    else:
+        test_loader = DataLoader(
+            test_data,
+            batch_size=args.test_batch_size,
+            collate_fn=collator,
+            shuffle=False,
+            num_workers=2,
+            pin_memory=True
+        )
     
-    logger.info(f"📈 Test data size: {len(test_data)}")
+    if local_rank == 0 and logger:
+        logger.info(f"📈 Test data size: {len(test_data)}")
     
     # 4. 开始测试
     metrics = args.metrics.split(",")
     metrics_results = {}
     total = 0
     
-    logger.info("🚀 Starting Hit Rate evaluation...")
+    if local_rank == 0 and logger:
+        logger.info("🚀 Starting Hit Rate evaluation...")
     
     with torch.no_grad():
         for step, batch in enumerate(tqdm(test_loader, desc="Testing")):
@@ -489,22 +550,37 @@ def run_stage2_test(args):
             num_beams = args.num_beams
             while True:
                 try:
-                    output = model.generate(
-                        input_ids=enc["input_ids"],
-                        attention_mask=enc.get("attention_mask", None),
-                        max_new_tokens=10,
-                        prefix_allowed_tokens_fn=prefix_allowed_tokens,
-                        num_beams=num_beams,
-                        num_return_sequences=num_beams,
-                        output_scores=True,
-                        return_dict_in_generate=True,
-                        early_stopping=True,
-                    )
+                    # 多GPU模式下使用 model.module.generate
+                    if world_size > 1:
+                        output = model.module.generate(
+                            input_ids=enc["input_ids"],
+                            attention_mask=enc.get("attention_mask", None),
+                            max_new_tokens=10,
+                            prefix_allowed_tokens_fn=prefix_allowed_tokens,
+                            num_beams=num_beams,
+                            num_return_sequences=num_beams,
+                            output_scores=True,
+                            return_dict_in_generate=True,
+                            early_stopping=True,
+                        )
+                    else:
+                        output = model.generate(
+                            input_ids=enc["input_ids"],
+                            attention_mask=enc.get("attention_mask", None),
+                            max_new_tokens=10,
+                            prefix_allowed_tokens_fn=prefix_allowed_tokens,
+                            num_beams=num_beams,
+                            num_return_sequences=num_beams,
+                            output_scores=True,
+                            return_dict_in_generate=True,
+                            early_stopping=True,
+                        )
                     break
                 except RuntimeError as e:
                     err = str(e).lower()
                     if "out of memory" in err or "cuda" in err:
-                        logger.warning(f"CUDA OOM with beam={num_beams}. Reducing beam size.")
+                        if local_rank == 0 and logger:
+                            logger.warning(f"CUDA OOM with beam={num_beams}. Reducing beam size.")
                         num_beams -= 1
                         if num_beams < 1:
                             raise RuntimeError("Beam search OOM even with beam=1") from e
@@ -517,8 +593,8 @@ def run_stage2_test(args):
             scores = output.get("sequences_scores", None)
             decoded = tokenizer.batch_decode(output_ids, skip_special_tokens=True)
             
-            # 详细日志记录和生成结果打印
-            if args.print_generations:
+            # 详细日志记录和生成结果打印（只在主进程）
+            if args.print_generations and local_rank == 0 and logger:
                 if scores is not None:
                     if hasattr(scores, 'detach'):
                         scores_list = [float(s) for s in scores.detach().cpu().tolist()]
@@ -559,36 +635,69 @@ def run_stage2_test(args):
                 metrics_results[m] = metrics_results.get(m, 0.0) + res
             total += bs
             
-            # 中间进度汇报
-            if (step + 1) % 50 == 0:
+            # 中间进度汇报（只在主进程）
+            if (step + 1) % 50 == 0 and local_rank == 0 and logger:
                 temp_results = {m: metrics_results[m] / total for m in metrics_results}
                 logger.info(f"[Progress] Step {step+1}, Metrics: {temp_results}")
     
-    # 5. 最终结果
-    for m in metrics_results:
-        metrics_results[m] = metrics_results[m] / total if total > 0 else 0.0
+    # 5. 多GPU结果聚合
+    if world_size > 1:
+        # 收集所有GPU的结果
+        if local_rank == 0:
+            # 主进程收集结果
+            all_device_metrics = [{}] * world_size
+            all_device_totals = [0] * world_size
+            
+            # 收集metrics和total
+            dist.gather_object(metrics_results, all_device_metrics)
+            dist.gather_object(total, all_device_totals)
+            
+            # 合并结果
+            final_metrics = {}
+            final_total = sum(all_device_totals)
+            
+            for m in metrics:
+                final_metrics[m] = sum(device_metrics.get(m, 0) for device_metrics in all_device_metrics)
+                final_metrics[m] = final_metrics[m] / final_total if final_total > 0 else 0.0
+        else:
+            # 非主进程发送结果
+            dist.gather_object(metrics_results, None)
+            dist.gather_object(total, None)
+            final_metrics = {}
+            final_total = 0
+    else:
+        # 单GPU模式
+        final_metrics = {m: metrics_results[m] / total if total > 0 else 0.0 for m in metrics_results}
+        final_total = total
     
-    logger.info("="*60)
-    logger.info("🎯 Final Hit Rate Results:")
-    logger.info("="*60)
-    for metric, value in metrics_results.items():
-        logger.info(f"{metric:>10}: {value:.4f}")
-    logger.info("="*60)
+    # 6. 输出结果（只在主进程）
+    if local_rank == 0 and logger:
+        logger.info("="*60)
+        logger.info("🎯 Final Hit Rate Results:")
+        logger.info("="*60)
+        for metric, value in final_metrics.items():
+            logger.info(f"{metric:>10}: {value:.4f}")
+        logger.info("="*60)
+        
+        # 输出结果摘要到日志
+        logger.info("\n📊 Test Summary:")
+        logger.info(f"Model: {args.base_model_path} + {args.stage1_model_path} + {args.stage2_model_path}")
+        logger.info(f"Dataset: Stage 2 validation data")
+        logger.info(f"Total samples: {final_total}")
+        logger.info(f"Batch size: {args.test_batch_size}")
+        logger.info(f"Beam size: {args.num_beams}")
+        logger.info(f"GPUs used: {world_size}")
+        logger.info(f"CoT enabled: {args.enable_cot}")
+        if args.enable_cot:
+            logger.info(f"Think max tokens: {args.think_max_tokens}")
+        
+        logger.info("\n✅ Testing completed successfully!")
     
-    # 6. 输出结果摘要到日志
-    logger.info("\n📊 Test Summary:")
-    logger.info(f"Model: {args.base_model_path} + {args.stage1_model_path} + {args.stage2_model_path}")
-    logger.info(f"Dataset: Stage 2 validation data")
-    logger.info(f"Total samples: {total}")
-    logger.info(f"Batch size: {args.test_batch_size}")
-    logger.info(f"Beam size: {args.num_beams}")
-    logger.info(f"CoT enabled: {args.enable_cot}")
-    if args.enable_cot:
-        logger.info(f"Think max tokens: {args.think_max_tokens}")
+    # 清理进程组
+    if world_size > 1:
+        dist.destroy_process_group()
     
-    logger.info("\n✅ Testing completed successfully!")
-    
-    return metrics_results
+    return final_metrics if local_rank == 0 else {}
 
 def main():
     """主函数"""

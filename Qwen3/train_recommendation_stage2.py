@@ -142,12 +142,12 @@ def setup_model_and_tokenizer(model_args):
     # 1. 加载tokenizer（从第一阶段LoRA模型路径，包含扩展的词汇表）
     print("📝 Loading tokenizer from Stage 1 LoRA model...")
     try:
-        tokenizer = AutoTokenizer.from_pretrained(model_args.stage1_lora_path)
+        tokenizer = AutoTokenizer.from_pretrained(model_args.stage1_lora_path, trust_remote_code=True)
         print(f"✅ Tokenizer loaded from LoRA path: {model_args.stage1_lora_path}")
     except Exception as e:
         print(f"⚠️ Failed to load tokenizer from LoRA path: {e}")
         print("📝 Falling back to base model tokenizer...")
-        tokenizer = AutoTokenizer.from_pretrained(model_args.base_model_path, use_fast=False)
+        tokenizer = AutoTokenizer.from_pretrained(model_args.base_model_path, use_fast=False, trust_remote_code=True)
         print(f"✅ Tokenizer loaded from base model with slow tokenizer")
     
     if tokenizer.pad_token is None:
@@ -160,6 +160,7 @@ def setup_model_and_tokenizer(model_args):
     base_model = AutoModelForCausalLM.from_pretrained(
         model_args.base_model_path,
         torch_dtype=torch.float16,
+        trust_remote_code=True,
         attn_implementation="flash_attention_2"
     )
     

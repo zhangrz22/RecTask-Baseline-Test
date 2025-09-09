@@ -67,16 +67,64 @@ class Stage2ValDataset:
         return list(items)
     
     def get_prefix_allowed_tokens_fn(self, tokenizer):
-        # 简化版本，允许所有SID tokens
-        def prefix_allowed_tokens(batch_id, input_ids):
-            # 允许所有特殊tokens
-            allowed_tokens = []
-            vocab = tokenizer.get_vocab()
-            for token, token_id in vocab.items():
-                if token.startswith('<s_') or token in ['<|sid_begin|>', '<|sid_end|>']:
-                    allowed_tokens.append(token_id)
-            return allowed_tokens
-        return prefix_allowed_tokens
+        # 使用与原始SeqRecDataset相同的约束逻辑
+        # 构建allowed_tokens映射（位置 -> 允许的token_ids）
+        allowed_tokens = {}
+        
+        # 模拟SID序列的结构: <|sid_begin|> <s_a_*> <s_b_*> <s_c_*> <s_d_*> <|sid_end|>
+        # 位置0: <|sid_begin|>
+        sid_begin_id = tokenizer.convert_tokens_to_ids('<|sid_begin|>')
+        allowed_tokens[0] = {sid_begin_id} if sid_begin_id != tokenizer.unk_token_id else set()
+        
+        # 位置1-4: s_a, s_b, s_c, s_d tokens
+        for i, prefix in enumerate(['s_a', 's_b', 's_c', 's_d'], 1):
+            allowed_tokens[i] = set()
+            for j in range(256):  # 0-255
+                token = f'<{prefix}_{j}>'
+                token_id = tokenizer.convert_tokens_to_ids(token)
+                if token_id != tokenizer.unk_token_id:
+                    allowed_tokens[i].add(token_id)
+        
+        # 位置5: <|sid_end|>
+        sid_end_id = tokenizer.convert_tokens_to_ids('<|sid_end|>')
+        allowed_tokens[5] = {sid_end_id} if sid_end_id != tokenizer.unk_token_id else set()
+        
+        # 位置6+: 只允许EOS
+        eos_id = tokenizer.eos_token_id if tokenizer.eos_token_id is not None else 0
+        allowed_tokens[6] = {eos_id}
+        
+        sep = tokenizer("Response:", add_special_tokens=False)["input_ids"]
+        
+        def find_last_sublist(lst, sub):
+            if not sub:
+                return None
+            n, m = len(lst), len(sub)
+            for start in range(n - m, -1, -1):
+                if lst[start:start + m] == sub:
+                    return start
+            return None
+        
+        def prefix_allowed_tokens_fn(batch_id, sentence):
+            sentence = sentence.tolist()
+            # 在已生成前缀中定位 "Response:" 的最后一次出现
+            pos = find_last_sublist(sentence, sep)
+            if pos is None:
+                # 未定位到分隔符时，不进行约束
+                try:
+                    vocab_size = getattr(tokenizer, 'vocab_size', None) or len(tokenizer)
+                except Exception:
+                    vocab_size = 50257
+                return list(range(vocab_size))
+            
+            # 第几个 response token（从 0 开始）
+            gen_pos = len(sentence) - (pos + len(sep))
+            if gen_pos in allowed_tokens:
+                return list(allowed_tokens[gen_pos])
+            else:
+                # 超过最大长度后，只允许结束
+                return list(allowed_tokens[6])  # EOS
+        
+        return prefix_allowed_tokens_fn
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Qwen3 Stage 2 Hit Rate Test")
@@ -279,7 +327,7 @@ def test_tokenization(tokenizer, logger):
         return True
 
 def setup_logging(log_file):
-    """设置详细日志 - 输出到文件和控制台"""
+    """设置详细日志 - 与Stage 1保持一致"""
     os.makedirs(os.path.dirname(log_file), exist_ok=True)
     
     # 创建logger
@@ -290,35 +338,61 @@ def setup_logging(log_file):
     if logger.handlers:
         logger.handlers.clear()
     
-    # 文件handler
+    # 只使用文件handler，不输出到控制台
     file_handler = logging.FileHandler(log_file, mode='w', encoding='utf-8')
     file_handler.setLevel(logging.DEBUG)
-    
-    # 控制台handler
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
     
     # formatter
     formatter = logging.Formatter('[%(asctime)s] %(levelname)s: %(message)s')
     file_handler.setFormatter(formatter)
-    console_handler.setFormatter(formatter)
     
     logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
     
     return logger
 
-def run_model_test(model, tokenizer, test_loader, all_items, prefix_allowed_tokens, 
-                   args, logger, model_name):
-    """运行单个模型的测试"""
-    logger.info(f"🚀 Starting {model_name} evaluation...")
+def run_stage2_test(args):
+    """运行Stage 2测试 - 与Stage 1保持完全一致的结构"""
+    set_seed(args.seed)
     
+    # 设置日志
+    logger = setup_logging(args.log_file)
+    logger.info("🧪 Starting Qwen3 Stage 2 Hit Rate Test")
+    logger.info(f"Args: {vars(args)}")
+    
+    # 1. 加载模型
+    model, tokenizer = load_stage2_model(args, logger)
+    
+    # 2. 测试tokenization
+    if not test_tokenization(tokenizer, logger):
+        logger.warning("SID tokenization可能有问题，但继续测试...")
+    
+    # 3. 加载数据集
+    logger.info("📊 Loading test dataset...")
+    test_data = Stage2ValDataset(args.stage2_val_data_path, sample_num=args.sample_num)
+    collator = TestCollator(args, tokenizer)
+    all_items = test_data.get_all_items()
+    prefix_allowed_tokens = test_data.get_prefix_allowed_tokens_fn(tokenizer)
+    
+    test_loader = DataLoader(
+        test_data,
+        batch_size=args.test_batch_size,
+        collate_fn=collator,
+        shuffle=False,
+        num_workers=2,
+        pin_memory=True
+    )
+    
+    logger.info(f"📈 Test data size: {len(test_data)}")
+    
+    # 4. 开始测试
     metrics = args.metrics.split(",")
     metrics_results = {}
     total = 0
     
+    logger.info("🚀 Starting Hit Rate evaluation...")
+    
     with torch.no_grad():
-        for step, batch in enumerate(tqdm(test_loader, desc=f"Testing {model_name}")):
+        for step, batch in enumerate(tqdm(test_loader, desc="Testing")):
             inputs_texts = batch["inputs"]
             targets = batch["targets"]
             bs = len(targets)
@@ -445,7 +519,7 @@ def run_model_test(model, tokenizer, test_loader, all_items, prefix_allowed_toke
                     cand_scores = scores_list[start:end]
                     
                     # 使用info级别确保控制台也能看到
-                    logger.info(f"----- {model_name} SAMPLE {step*bs + i} -----")
+                    logger.info(f"----- SAMPLE {step*bs + i} -----")
                     logger.info(f"PROMPT:\n{inputs_texts[i]}")
                     if args.enable_cot and think_texts[i]:
                         logger.info(f"THINK:\n{think_texts[i]}")
@@ -473,109 +547,45 @@ def run_model_test(model, tokenizer, test_loader, all_items, prefix_allowed_toke
             # 中间进度汇报
             if (step + 1) % 50 == 0:
                 temp_results = {m: metrics_results[m] / total for m in metrics_results}
-                logger.info(f"[{model_name} Progress] Step {step+1}, Metrics: {temp_results}")
+                logger.info(f"[Progress] Step {step+1}, Metrics: {temp_results}")
     
-    # 计算最终结果
+    # 5. 最终结果
     for m in metrics_results:
         metrics_results[m] = metrics_results[m] / total if total > 0 else 0.0
     
-    return metrics_results
-
-def run_stage2_test(args, logger=None):
-    """运行Stage 2测试 - 使用训练时预留的验证数据"""
-    set_seed(args.seed)
+    logger.info("="*60)
+    logger.info("🎯 Final Hit Rate Results:")
+    logger.info("="*60)
+    for metric, value in metrics_results.items():
+        logger.info(f"{metric:>10}: {value:.4f}")
+    logger.info("="*60)
     
-    # 如果没有传入logger，创建一个
-    if logger is None:
-        logger = setup_logging(args.log_file)
-    
-    logger.info("🧪 Starting Qwen3 Stage 2 Hit Rate Test")
-    logger.info(f"Args: {vars(args)}")
-    
-    # 加载Stage 2验证数据集（训练时预留的数据）
-    logger.info("📊 Loading Stage 2 validation dataset...")
-    logger.info(f"   Data source: {args.stage2_val_data_path}")
-    logger.info("   Using Stage 2 validation data (preserved from training)")
-    
-    test_data = Stage2ValDataset(args.stage2_val_data_path, sample_num=args.sample_num)
-    all_items = test_data.get_all_items()
-    logger.info(f"📈 Test data size: {len(test_data)}")
-    
-    # 测试完整的Stage 2模型 (Base + Stage1 + Stage2)
-    logger.info("\n" + "="*80)
-    logger.info("🎯 Testing Complete Stage 2 Model")
-    logger.info("    Architecture: Base + Stage1(SID映射) + Stage2(推荐增强)")
-    logger.info("="*80)
-    
-    stage2_model, stage2_tokenizer = load_stage2_model(args, logger)
-    
-    # 测试tokenization
-    if not test_tokenization(stage2_tokenizer, logger):
-        logger.warning("Stage 2 SID tokenization可能有问题，但继续测试...")
-    
-    stage2_collator = TestCollator(args, stage2_tokenizer)
-    stage2_prefix_allowed_tokens = test_data.get_prefix_allowed_tokens_fn(stage2_tokenizer)
-    
-    stage2_loader = DataLoader(
-        test_data,
-        batch_size=args.test_batch_size,
-        collate_fn=stage2_collator,
-        shuffle=False,
-        num_workers=2,
-        pin_memory=True
-    )
-    
-    results = run_model_test(
-        stage2_model, stage2_tokenizer, stage2_loader, all_items, 
-        stage2_prefix_allowed_tokens, args, logger, "Complete Stage 2"
-    )
-    
-    # 输出最终结果
-    logger.info("\n" + "="*80)
-    logger.info("📊 FINAL RESULTS")
-    logger.info("="*80)
-    
-    logger.info("🎯 Complete Stage 2 Model Results:")
-    for metric, value in results.items():
-        logger.info(f"  {metric:>10}: {value:.4f}")
-    
-    logger.info("="*80)
-    
-    # 输出测试摘要
-    logger.info("\n📋 Test Summary:")
-    logger.info(f"Base Model: {args.base_model_path}")
-    logger.info(f"Stage 1 Model: {args.stage1_model_path}")
-    logger.info(f"Stage 2 Model: {args.stage2_model_path}")
-    logger.info(f"Dataset: {args.dataset}")
-    logger.info(f"Total samples: {len(test_data)}")
+    # 6. 输出结果摘要到日志
+    logger.info("\n📊 Test Summary:")
+    logger.info(f"Model: {args.base_model_path} + {args.stage1_model_path} + {args.stage2_model_path}")
+    logger.info(f"Dataset: Stage 2 validation data")
+    logger.info(f"Total samples: {total}")
     logger.info(f"Batch size: {args.test_batch_size}")
     logger.info(f"Beam size: {args.num_beams}")
     logger.info(f"CoT enabled: {args.enable_cot}")
     if args.enable_cot:
         logger.info(f"Think max tokens: {args.think_max_tokens}")
     
-    logger.info("\n✅ Complete Stage 2 model testing completed successfully!")
+    logger.info("\n✅ Testing completed successfully!")
     
-    return results
+    return metrics_results
 
 def main():
     """主函数"""
     args = parse_args()
     
-    # 设置日志（先创建以便记录错误）
-    logger = setup_logging(args.log_file)
-    
     try:
-        results = run_stage2_test(args, logger)
-        logger.info("✅ Stage 2 testing completed successfully!")
+        results = run_stage2_test(args)
         return True
     except Exception as e:
-        # 将错误同时输出到日志和控制台
+        # 只在出错时输出到控制台
         import traceback
-        error_msg = f"❌ Testing failed: {e}"
-        logger.error(error_msg)
-        logger.error("Traceback:")
-        logger.error(traceback.format_exc())
+        traceback.print_exc()
         return False
 
 if __name__ == "__main__":

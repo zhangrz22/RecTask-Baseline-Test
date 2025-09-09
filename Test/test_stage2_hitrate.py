@@ -464,7 +464,7 @@ def run_stage2_test(args):
     else:
         test_data = Stage2ValDataset(args.stage2_val_data_path, sample_num=args.sample_num)
         if local_rank == 0 and logger:
-            logger.info("⚠️  Using raw data (slower loading)")}
+            logger.info("⚠️  Using raw data (slower loading)")
     collator = TestCollator(args, tokenizer)
     all_items = test_data.get_all_items()
     prefix_allowed_tokens = test_data.get_prefix_allowed_tokens_fn(tokenizer)

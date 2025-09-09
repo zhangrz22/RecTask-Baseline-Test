@@ -29,11 +29,10 @@ nohup python3 -u test_qwen3_hitrate.py \
   --lora_model_path "${LORA_MODEL_PATH}" \
   --data_path . \
   --dataset Beauty \
-  --test_batch_size 64 \
+  --test_batch_size 8 \
   --num_beams 20 \
   --metrics "hit@1,hit@5,hit@10,ndcg@5,ndcg@10" \
-  --enable_cot \
-  --think_max_tokens 64 \
+  --think_max_tokens 0 \
   --print_generations \
   --sample_num 400 \
   --log_file "$LOG" \

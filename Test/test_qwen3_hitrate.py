@@ -101,6 +101,8 @@ def load_qwen3_model(args, logger):
         tokenizer = AutoTokenizer.from_pretrained(args.lora_model_path)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
+        # 设置左侧padding用于生成任务
+        tokenizer.padding_side = "left"
         logger.info(f"✅ Tokenizer loaded, vocab size: {len(tokenizer)}")
         
         # 2. 加载基础模型
@@ -231,7 +233,7 @@ def run_hitrate_test(args):
             
             # === Stage 1: Think (optional) ===
             think_texts = [""] * bs
-            if args.enable_cot:
+            if args.enable_cot and args.think_max_tokens > 0:
                 logger.info(f"🤔 Starting CoT Think stage for batch {step}...")
                 think_inputs_texts = [f"{msg}\nThink:" for msg in inputs_texts]
                 
@@ -280,9 +282,11 @@ def run_hitrate_test(args):
                         logger.info(f"Extracted think text {i}: '{think_texts[i]}'")
                         
                 logger.info(f"✅ CoT Think stage completed for batch {step}")
+            elif args.enable_cot:
+                logger.info("⚠️  CoT enabled but think_max_tokens=0, skipping Think stage")
 
             # === Stage 2: Response (constrained) ===
-            if args.enable_cot:
+            if args.enable_cot and args.think_max_tokens > 0:
                 response_inputs_texts = [f"{msg}\nThink:{think_texts[i]}\nResponse:" for i, msg in enumerate(inputs_texts)]
                 # 调试：显示包含think的response input
                 if step < 3:

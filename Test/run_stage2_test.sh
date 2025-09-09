@@ -26,8 +26,7 @@ python3 test_stage2_hitrate.py \
     --num_beams 20 \
     --sample_num 1000 \
     --metrics "hit@1,hit@5,hit@10,ndcg@5,ndcg@10" \
-    --enable_cot \
-    --think_max_tokens 64 \
+    --think_max_tokens 0 \
     --print_generations \
     --log_file ./logs/stage2_test.log
 

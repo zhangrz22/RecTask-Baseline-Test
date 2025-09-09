@@ -47,9 +47,10 @@ class Stage2ValDataset:
             # 从response中提取目标
             response = row['response']
             
+            # 匹配TestCollator期望的格式: input_ids, labels
             self.data.append({
-                'inputs': instruction,
-                'targets': response
+                'input_ids': instruction + "\nResponse:",  # TestCollator会处理这个格式
+                'labels': response
             })
     
     def __len__(self):
@@ -59,10 +60,10 @@ class Stage2ValDataset:
         return self.data[idx]
     
     def get_all_items(self):
-        # 返回所有可能的items（从targets中提取）
+        # 返回所有可能的items（仏labels中提取）
         items = set()
         for item in self.data:
-            items.add(item['targets'])
+            items.add(item['labels'])
         return list(items)
     
     def get_prefix_allowed_tokens_fn(self, tokenizer):

@@ -139,9 +139,17 @@ def setup_model_and_tokenizer(model_args):
     print("="*60)
     print("🔄 Setting up Stage 2 model...")
     
-    # 1. 加载tokenizer（从基础模型，包含扩展的词汇表）
-    print("📝 Loading tokenizer from base model...")
-    tokenizer = AutoTokenizer.from_pretrained(model_args.base_model_path)
+    # 1. 加载tokenizer（从第一阶段LoRA模型路径，包含扩展的词汇表）
+    print("📝 Loading tokenizer from Stage 1 LoRA model...")
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(model_args.stage1_lora_path)
+        print(f"✅ Tokenizer loaded from LoRA path: {model_args.stage1_lora_path}")
+    except Exception as e:
+        print(f"⚠️ Failed to load tokenizer from LoRA path: {e}")
+        print("📝 Falling back to base model tokenizer...")
+        tokenizer = AutoTokenizer.from_pretrained(model_args.base_model_path, use_fast=False)
+        print(f"✅ Tokenizer loaded from base model with slow tokenizer")
+    
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     

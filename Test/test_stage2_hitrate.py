@@ -458,7 +458,7 @@ def run_stage2_test(args):
         import sys
         sys.path.append(os.path.dirname(__file__))
         from preprocess_stage2_data import PreprocessedStage2Dataset
-        test_data = PreprocessedStage2Dataset(args.preprocessed_data_path)
+        test_data = PreprocessedStage2Dataset(args.preprocessed_data_path, sample_num=args.sample_num)
         if local_rank == 0 and logger:
             logger.info("✅ Using preprocessed data for faster loading")
     else:

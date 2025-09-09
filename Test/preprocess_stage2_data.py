@@ -63,14 +63,20 @@ def preprocess_stage2_data(input_path, output_path, sample_num=-1):
 
 class PreprocessedStage2Dataset:
     """使用预处理数据的快速数据集"""
-    def __init__(self, preprocessed_path):
+    def __init__(self, preprocessed_path, sample_num=-1):
         print(f"⚡ Loading preprocessed data from {preprocessed_path}...")
         with open(preprocessed_path, 'r', encoding='utf-8') as f:
             self.data_dict = json.load(f)
         
         self.data = self.data_dict['data']
         self.all_items_cache = self.data_dict['all_items']
-        print(f"✅ Loaded {len(self.data)} preprocessed samples")
+        
+        # 处理sample_num参数
+        if sample_num > 0 and sample_num < len(self.data):
+            self.data = self.data[:sample_num]
+            print(f"✅ Loaded {len(self.data)} preprocessed samples (limited by sample_num={sample_num})")
+        else:
+            print(f"✅ Loaded {len(self.data)} preprocessed samples")
     
     def __len__(self):
         return len(self.data)
